@@ -31,8 +31,12 @@ You receive a product page's title/text and a SHORTLIST of candidate image thumb
  "images":     [{"index":0,"role":"main|angle|detail|skip"}]  // judge EVERY thumbnail by index
 }
 Image curation rules — be selective, quality over quantity:
-- "main" = exactly ONE: the single clearest, best-lit, full-product hero shot.
-- "angle"/"detail" = additional CLEAN shots of the SAME product from other views.
+- "main" = exactly ONE: the single clearest, best-lit, full-product hero shot. STRONGLY PREFER a
+  clean product-ONLY photo on a plain/white/neutral background (no hands, no human body, no model,
+  no lifestyle scene). Only fall back to a lifestyle/in-hand shot for main if there is NO clean
+  product-only image at all.
+- "angle"/"detail" = additional CLEAN product shots of the SAME product from other views. Lifestyle/
+  in-hand/model shots go here at best (or "skip") — never as main when a clean product shot exists.
 - "skip" = anything low quality: blurry, watermarked, a collage/multi-product grid, a different product, lifestyle/model-only with no clear product, text/banner/logo, or a near-duplicate of one you already kept.
 - If several thumbnails show DIFFERENT products (e.g. a search page), keep only the ONE product that best matches the page title; skip the rest.
 Professional, tasteful language only. If the page text is unrelated, derive the name from the kept images.`;
