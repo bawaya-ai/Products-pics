@@ -15,7 +15,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const TIME_BUDGET_MS = 40_000; // stop early; leave headroom for AI enrich + flush under the 60s Vercel kill
+const TIME_BUDGET_MS = 46_000; // stop early; leave headroom for the fast bg-off fallback + flush under the 60s Vercel kill
 
 export async function POST(req: NextRequest) {
   if (!checkAppAuth(req)) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
@@ -111,6 +111,23 @@ export async function POST(req: NextRequest) {
           } catch (e: any) {
             send({ type: 'image', index: n, total: keepOrder.length, status: 'failed', detail: String(e?.message).slice(0, 120) });
           }
+        }
+
+        // Guaranteed-result fallback: if nothing got processed (slow search + slow
+        // cold-start bg model ate the budget), return the top image WITHOUT bg removal
+        // so the user always gets something usable.
+        if (images.length === 0 && keepOrder[0] && pool[keepOrder[0].index] && s.bgMode !== 'off') {
+          try {
+            const c = pool[keepOrder[0].index];
+            const out = await processImage(c.buf, c.contentType, { ...s, bgMode: 'off' }, log);
+            images.push({
+              id: 'im_fallback', sourceUrl: c.sourceUrl, role: 'main', order: 0,
+              dataUrl: `data:${out.contentType};base64,${out.buf.toString('base64')}`,
+              width: out.width, height: out.height, bytes: out.bytes,
+              hasAlpha: false, bgProvider: 'none', warnings: ['bg_skipped_time'],
+            });
+            send({ type: 'warn', message: 'الوقت ضاق — رجّعت الصورة الرئيسية بدون إزالة خلفية. للخلفية النظيفة جرّب رابط منتج مباشر أو مفتاح Replicate.' });
+          } catch { /* fall through to error */ }
         }
         if (images.length === 0) { send({ type: 'error', message: 'كل الصور فشلت بالمعالجة.' }); controller.close(); return; }
         if (!images.some((i) => i.role === 'main')) images[0].role = 'main';
