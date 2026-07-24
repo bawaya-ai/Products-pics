@@ -33,7 +33,7 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [crawl, setCrawl] = useState(false);
-  const [crawlLimit] = useState(12);
+  const [crawlLimit] = useState(10);
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
@@ -97,14 +97,14 @@ export default function Home() {
   };
 
   // Stream one /api/scrape call; push progress to the log; resolve with the manifest.
-  async function scrapeUrl(u: string, tag = ''): Promise<Manifest | null> {
+  async function scrapeUrl(u: string, tag = '', settingsOverride?: ClientSettings): Promise<Manifest | null> {
     let manifestOut: Manifest | null = null;
     const pre = tag ? `${tag} ` : '';
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
-        body: JSON.stringify({ url: u, settings }),
+        body: JSON.stringify({ url: u, settings: settingsOverride || settings }),
       });
       if (!res.ok || !res.body) { pushLog(`${pre}HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`, 'err'); return null; }
       const reader = res.body.getReader();
@@ -136,7 +136,7 @@ export default function Home() {
 
   async function run() {
     if (!url.trim() || busy) return;
-    if (crawl && /^https?:\/\//i.test(url.trim())) return runCrawl();
+    if (crawl) return runCrawl();
     setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4);
     pushLog('▶ بدأنا…');
     const m = await scrapeUrl(url.trim());
@@ -163,8 +163,11 @@ export default function Home() {
       const acc: CrawlItem[] = [];
       for (let i = 0; i < urls.length; i++) {
         pushLog(`— (${i + 1}/${urls.length}) ${urls[i].replace(/^https?:\/\/[^/]+/, '')}`);
-        const m = await scrapeUrl(urls[i], `[${i + 1}/${urls.length}]`);
-        if (m && m.images.length) { acc.push({ manifest: m }); setProducts([...acc]); }
+        const m = await scrapeUrl(urls[i], `[${i + 1}/${urls.length}]`, { ...settings, maxImages: Math.max(settings.maxImages || 8, 5) });
+        if (m && m.images.length) {
+          acc.push({ manifest: m }); setProducts([...acc]);
+          if (m.images.filter((i2) => i2.role !== 'skip').length < 3) pushLog(`  ⚠ منتج ${i + 1} طلع بأقل من 3 صور (المصدر ما فيه أكتر)`, 'warn');
+        }
       }
       pushLog(`✓ خلص — ${acc.length}/${urls.length} منتج جاهز.`, 'ok');
       setProgress(100);
@@ -311,13 +314,13 @@ export default function Home() {
         <div className="row" style={{ marginTop: 8, justifyContent: 'space-between' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', color: crawl ? 'var(--gold)' : 'var(--muted)' }}>
             <input type="checkbox" checked={crawl} onChange={(e) => setCrawl(e.target.checked)} style={{ width: 'auto' }} />
-            📑 زحف: افتح كل منتجات صفحة القائمة/التصنيف واسحبهن (حتى {crawlLimit})
+            🌐 زحف على دومين: اعطِ دومين أو رابط متجر → تلاقي {crawlLimit} منتجات وتسحب كل واحد لحاله
           </label>
         </div>
         <div className="hint" style={{ marginTop: 4 }}>
           {crawl
-            ? 'الصق رابط صفحة قائمة/تصنيف/الأكثر مبيعًا — الأداة بتفتح كل منتج وتسحبه لحاله.'
-            : 'الصق رابط منتج (تيمو/أي موقع)، أو اكتب اسم منتج للبحث بالصور، أو فعّل الزحف لسحب صفحة كاملة.'}
+            ? 'اعطِ دومين (lelo.com) أو رابط متجر/تصنيف — الأداة بتلاقي صفحات المنتجات لحالها، بتفتح كل منتج، وتسحب صوره (≥3) + الوصف + السعر بمجلد باسمه.'
+            : 'الصق رابط منتج (تيمو/أي موقع)، أو اكتب اسم منتج للبحث بالصور، أو فعّل الزحف على دومين لسحب متجر كامل.'}
         </div>
         {(busy || progress > 0) && <div className="bar"><i style={{ width: `${progress}%` }} /></div>}
         {logLines.length > 0 && (

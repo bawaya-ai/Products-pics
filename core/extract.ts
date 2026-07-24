@@ -169,8 +169,9 @@ const LINK_JUNK =
 /** Extract likely PRODUCT-PAGE urls from a listing page: anchors that wrap a
  *  product image, same-host, minus nav/category/policy links. Generic across stores. */
 export function collectProductLinks(html: string, baseHref: string, limit = 24): string[] {
+  const bare = (h: string) => h.replace(/^www\./i, '');
   let host = '';
-  try { host = new URL(baseHref).host; } catch {}
+  try { host = bare(new URL(baseHref).host); } catch {}
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (raw: string) => {
@@ -179,7 +180,7 @@ export function collectProductLinks(html: string, baseHref: string, limit = 24):
     else if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, baseHref).href; } catch { return; } }
     let parsed: URL;
     try { parsed = new URL(u); } catch { return; }
-    if (host && parsed.host !== host) return;              // same store only
+    if (host && bare(parsed.host) !== host) return;        // same store only (www-insensitive)
     if (LINK_JUNK.test(parsed.pathname)) return;
     const path = parsed.pathname.replace(/\/+$/, '');
     if (!path || path === '/' || path.split('/').filter(Boolean).length === 0) return; // homepage/nav
