@@ -55,7 +55,8 @@ export default function Home() {
   ];
   // saved source per provider: 'server' (env) | 'browser' (UI) | 'none'
   const savedSource = (id: string): 'server' | 'browser' | 'none' => {
-    if (envStatus?.[id]) return 'server';
+    const envKey = id === 'store' ? 'storeToken' : id; // status reports the store token, not "store"
+    if (envStatus?.[envKey]) return 'server';
     if (PROVIDERS.find((p) => p.id === id)?.filled(settings)) return 'browser';
     return 'none';
   };
