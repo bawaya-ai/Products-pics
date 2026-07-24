@@ -3,9 +3,10 @@
 // → { type:'result', manifest }
 
 import { NextRequest } from 'next/server';
-import { resolveSettings, checkAppAuth, type Settings } from '@/core/settings';
-import { extractMedia, fetchImage } from '@/core/extract';
-import { processImage, thumbnailJpeg } from '@/core/process';
+import { resolveSettings, checkAppAuth } from '@/core/settings';
+import { extractMedia } from '@/core/extract';
+import { selectPool, poolThumb } from '@/core/select';
+import { processImage } from '@/core/process';
 import { enrich } from '@/core/enrich';
 import type { Manifest, ProcessedImage, ProgressEvent } from '@/core/types';
 
@@ -45,42 +46,55 @@ export async function POST(req: NextRequest) {
           controller.close(); return;
         }
 
+        // ── SELECT: download pool, measure real resolution, drop tiny/duplicates, rank ──
+        send({ type: 'stage', stage: 'select', detail: 'قياس الدقّة واختيار الأفضل…' });
+        const pool = await selectPool(ex.imageUrls, s, log);
+        if (pool.length === 0) { send({ type: 'error', message: 'ما في صور بدقّة كافية (كلها صغيرة/مكرّرة).' }); controller.close(); return; }
+
+        // ── AI CURATE: pick the best shots (roles, drop junk) + write the copy, one call ──
+        let ai = { name: { en: '', ar: '', he: '' }, description: { en: '', ar: '', he: '' }, tags: [] as string[], price_ils: null as number | null, imageRoles: [] as { index: number; role: any }[], provider: 'none' };
+        let keepOrder = pool.map((_, i) => ({ index: i, role: (i === 0 ? 'main' : 'angle') as any }));
+        if (s.aiEnabled) {
+          send({ type: 'stage', stage: 'curate', detail: 'الذكاء يختار الأفضل ويكتب الوصف…' });
+          const poolThumbs = await Promise.all(pool.map((c) => poolThumb(c.buf)));
+          ai = await enrich(ex.pageTitle, ex.pageText, poolThumbs, s, log);
+          const kept = ai.imageRoles.filter((r) => r.role !== 'skip' && pool[r.index]);
+          if (kept.length) {
+            // main first, then as the AI ordered them
+            keepOrder = kept.sort((a, b) => (a.role === 'main' ? -1 : b.role === 'main' ? 1 : 0)).slice(0, s.maxImages);
+            log(`AI kept ${keepOrder.length}/${pool.length}, skipped ${pool.length - keepOrder.length}`);
+          }
+        } else {
+          keepOrder = keepOrder.slice(0, s.maxImages);
+        }
+        if (!keepOrder.some((k) => k.role === 'main') && keepOrder[0]) keepOrder[0].role = 'main';
+
+        // ── PROCESS: background-remove + unify only the chosen winners ──
         const images: ProcessedImage[] = [];
-        const thumbs: string[] = [];
-        for (let i = 0; i < ex.imageUrls.length; i++) {
+        for (let n = 0; n < keepOrder.length; n++) {
           if (Date.now() - started > TIME_BUDGET_MS) {
-            send({ type: 'warn', message: `time budget reached — skipped ${ex.imageUrls.length - i} remaining image(s)` });
+            send({ type: 'warn', message: `الوقت خلص — تم تخطّي ${keepOrder.length - n} صورة.` });
             break;
           }
-          const src = ex.imageUrls[i];
-          send({ type: 'image', index: i, total: ex.imageUrls.length, status: 'processing' });
-          const fetched = await fetchImage(src);
-          if (!fetched) { send({ type: 'image', index: i, total: ex.imageUrls.length, status: 'failed', detail: 'fetch failed' }); continue; }
+          const { index, role } = keepOrder[n];
+          const c = pool[index];
+          send({ type: 'image', index: n, total: keepOrder.length, status: 'processing', detail: `${c.width}×${c.height}` });
           try {
-            const out = await processImage(fetched.buf, fetched.contentType, s, log);
-            const id = `im_${i}_${Math.random().toString(36).slice(2, 8)}`;
+            const out = await processImage(c.buf, c.contentType, s, log);
             images.push({
-              id, sourceUrl: src, role: i === 0 ? 'main' : 'angle', order: i,
+              id: `im_${n}_${Math.random().toString(36).slice(2, 8)}`,
+              sourceUrl: c.sourceUrl, role, order: n,
               dataUrl: `data:${out.contentType};base64,${out.buf.toString('base64')}`,
               width: out.width, height: out.height, bytes: out.bytes,
               hasAlpha: out.hasAlpha, bgProvider: out.bgProvider, warnings: out.warnings,
             });
-            thumbs.push((await thumbnailJpeg(out.buf)).toString('base64'));
-            send({ type: 'image', index: i, total: ex.imageUrls.length, status: 'done', detail: `${out.width}×${out.height} · ${(out.bytes / 1024).toFixed(0)}KB · bg:${out.bgProvider}` });
+            send({ type: 'image', index: n, total: keepOrder.length, status: 'done', detail: `${out.width}×${out.height} · ${(out.bytes / 1024).toFixed(0)}KB · bg:${out.bgProvider}` });
           } catch (e: any) {
-            send({ type: 'image', index: i, total: ex.imageUrls.length, status: 'failed', detail: String(e?.message).slice(0, 120) });
+            send({ type: 'image', index: n, total: keepOrder.length, status: 'failed', detail: String(e?.message).slice(0, 120) });
           }
         }
         if (images.length === 0) { send({ type: 'error', message: 'كل الصور فشلت بالمعالجة.' }); controller.close(); return; }
-
-        // AI enrichment (skip when out of time — images still returned)
-        let ai = { name: { en: '', ar: '', he: '' }, description: { en: '', ar: '', he: '' }, tags: [] as string[], price_ils: null as number | null, imageRoles: [] as { index: number; role: any }[], provider: 'none' };
-        if (s.aiEnabled && Date.now() - started < TIME_BUDGET_MS - 8000) {
-          send({ type: 'stage', stage: 'enrich', detail: 'تحليل بالذكاء الاصطناعي (اسم/وصف/تصنيف)…' });
-          ai = await enrich(ex.pageTitle, ex.pageText, thumbs, s, log);
-          for (const r of ai.imageRoles) if (images[r.index]) images[r.index].role = r.role;
-          if (!images.some((i) => i.role === 'main')) images[0].role = 'main';
-        }
+        if (!images.some((i) => i.role === 'main')) images[0].role = 'main';
 
         const manifest: Manifest = {
           sourceUrl: url,

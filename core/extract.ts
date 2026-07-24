@@ -12,7 +12,7 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const IMG_RE = /https?:\/\/[^\s"'\\<>()]+?\.(?:jpg|jpeg|png|webp|avif)(?:\?[^\s"'\\<>()]*)?/gi;
 const JUNK =
-  /(sprite|icon|logo|favicon|placeholder|avatar|flag|emoji|loading|blank|1x1|pixel|\/ui\/|\/static\/|badge|rating|star|captcha|qrcode|payment|visa|mastercard|paypal)/i;
+  /(sprite|icon|logo|favicon|placeholder|avatar|flag|emoji|loading|blank|1x1|pixel|\/ui\/|\/static\/|badge|rating|star|captcha|qrcode|payment|visa|mastercard|paypal|\/wiki\/|[?&/]file:|\.html\b)/i;
 
 export interface Extraction {
   imageUrls: string[];
@@ -88,7 +88,11 @@ export async function extractMedia(
   const ordered: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw) return;
-    const u = decode(raw);
+    let u = decode(raw).trim();
+    if (u.startsWith('//')) u = 'https:' + u;                 // protocol-relative → https
+    else if (!/^https?:\/\//i.test(u)) {
+      try { u = new URL(u, target.href).href; } catch { return; } // relative → absolute (against page URL)
+    }
     if (!/^https?:\/\//i.test(u) || JUNK.test(u)) return;
     const b = baseKey(u);
     const prev = found.get(b);
@@ -131,8 +135,11 @@ export async function extractMedia(
   }
 
   const { title, text } = pageTextFrom(html);
-  const imageUrls = ordered.map((b) => found.get(b)!).slice(0, s.maxImages);
-  log(`candidates: ${found.size}, keeping ${imageUrls.length}`);
+  // Return a POOL of candidates (bigger than maxImages) so the selection step can
+  // rank by real resolution + AI quality and drop junk/dupes before processing.
+  const poolSize = Math.min(28, Math.max(s.maxImages * 3, 14));
+  const imageUrls = ordered.map((b) => found.get(b)!).slice(0, poolSize);
+  log(`candidates: ${found.size}, pool: ${imageUrls.length}`);
   return { imageUrls, pageTitle: title, pageText: text, usedFirecrawl, warnings };
 }
 

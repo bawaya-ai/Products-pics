@@ -21,16 +21,21 @@ const EMPTY: Enrichment = {
   tags: [], price_ils: null, imageRoles: [], provider: 'none',
 };
 
-const SYS = `You are a senior e-commerce product specialist for an adult (18+) intimate-products store in the Middle East.
-Given a product page's title/text and product image thumbnails, return STRICT JSON only (no markdown) with:
+const SYS = `You are a senior e-commerce product specialist + photo editor for an adult (18+) intimate-products store in the Middle East.
+You receive a product page's title/text and a SHORTLIST of candidate image thumbnails (already pre-sorted by resolution, highest first). Curate the best set and write the copy. Return STRICT JSON only (no markdown):
 {
  "name":       {"en":"…","ar":"…","he":"…"},          // short, premium product names
  "description":{"en":"…","ar":"…","he":"…"},          // 2-3 tasteful marketing sentences each; Arabic in warm Palestinian-friendly tone; never explicit
  "tags":       ["…"],                                  // 3-6 lowercase tags
- "price_ils":  number|null,                            // price in Israeli Shekels if clearly present in the text, else null — NEVER guess
- "images":     [{"index":0,"role":"main|angle|detail|skip"}]  // classify EVERY thumbnail by index; exactly one "main" (the clearest full product shot); "skip" = irrelevant/junk
+ "price_ils":  number|null,                            // price in ILS only if clearly in the text, else null — NEVER guess
+ "images":     [{"index":0,"role":"main|angle|detail|skip"}]  // judge EVERY thumbnail by index
 }
-Professional, tasteful language only. If the page text is garbage/unrelated, derive the name from what the images show.`;
+Image curation rules — be selective, quality over quantity:
+- "main" = exactly ONE: the single clearest, best-lit, full-product hero shot.
+- "angle"/"detail" = additional CLEAN shots of the SAME product from other views.
+- "skip" = anything low quality: blurry, watermarked, a collage/multi-product grid, a different product, lifestyle/model-only with no clear product, text/banner/logo, or a near-duplicate of one you already kept.
+- If several thumbnails show DIFFERENT products (e.g. a search page), keep only the ONE product that best matches the page title; skip the rest.
+Professional, tasteful language only. If the page text is unrelated, derive the name from the kept images.`;
 
 export async function enrich(
   pageTitle: string,
