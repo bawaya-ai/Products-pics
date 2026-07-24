@@ -5,6 +5,7 @@
 import { NextRequest } from 'next/server';
 import { resolveSettings, checkAppAuth } from '@/core/settings';
 import { extractMedia } from '@/core/extract';
+import { searchImages } from '@/core/websearch';
 import { selectPool, poolThumb } from '@/core/select';
 import { processImage } from '@/core/process';
 import { enrich } from '@/core/enrich';
@@ -20,10 +21,12 @@ export async function POST(req: NextRequest) {
   if (!checkAppAuth(req)) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
 
   const body = await req.json().catch(() => null);
-  const url: string | undefined = body?.url;
-  if (!url || typeof url !== 'string') {
-    return new Response(JSON.stringify({ error: 'url required' }), { status: 400 });
+  const input: string | undefined = body?.url;
+  if (!input || typeof input !== 'string') {
+    return new Response(JSON.stringify({ error: 'url or search query required' }), { status: 400 });
   }
+  const url = input.trim();
+  const isUrl = /^https?:\/\//i.test(url);
   const s = resolveSettings(body?.settings);
 
   const enc = new TextEncoder();
@@ -33,22 +36,38 @@ export async function POST(req: NextRequest) {
       const send = (e: ProgressEvent) => controller.enqueue(enc.encode(JSON.stringify(e) + '\n'));
       const log = (m: string) => send({ type: 'stage', stage: 'log', detail: m });
       try {
-        // Warn early on search/listing/category pages — they yield mixed thumbnails, not one product.
-        if (/\b(search_result|search_key|\/search|category|list\.html|goods_list)\b/i.test(url)) {
-          send({ type: 'warn', message: 'هذا رابط بحث/تصنيف — بيسحب صور منتجات مخلوطة. الأفضل رابط منتج واحد (goods.html / -g-رقم).' });
+        // ── SOURCE: a product URL (extract from the page) OR a text query (web search) ──
+        let candidateUrls: string[] = [];
+        let pageTitle = '';
+        let pageText = '';
+        let srcWarnings: string[] = [];
+
+        if (isUrl) {
+          if (/\b(search_result|search_key|\/search|category|list\.html|goods_list)\b/i.test(url)) {
+            send({ type: 'warn', message: 'هذا رابط بحث/تصنيف — بيسحب صور منتجات مخلوطة. الأفضل رابط منتج واحد (goods.html / -g-رقم).' });
+          }
+          send({ type: 'stage', stage: 'extract', detail: 'استخراج الصور من الصفحة…' });
+          const ex = await extractMedia(url, s, log);
+          candidateUrls = ex.imageUrls; pageTitle = ex.pageTitle; pageText = ex.pageText; srcWarnings = ex.warnings;
+        } else {
+          send({ type: 'stage', stage: 'search', detail: `بحث عن صور: "${url}"…` });
+          send({ type: 'warn', message: '🔎 بحث ويب — الصور من مصادر عامة (حقوقها مجهولة). راجعها قبل الحفظ.' });
+          const ws = await searchImages(url, s, log);
+          candidateUrls = ws.imageUrls; pageTitle = url; pageText = `Product search query: ${url}`; srcWarnings = ws.warnings;
         }
 
-        send({ type: 'stage', stage: 'extract', detail: 'استخراج الصور من الصفحة…' });
-        const ex = await extractMedia(url, s, log);
-        ex.warnings.forEach((w) => send({ type: 'warn', message: w }));
-        if (ex.imageUrls.length === 0) {
-          send({ type: 'error', message: 'ما لقيت ولا صورة بالصفحة — جرّب رابط فيه top_gallery_url أو فعّل Firecrawl بالإعدادات.' });
+        srcWarnings.forEach((w) => send({ type: 'warn', message: w }));
+        if (candidateUrls.length === 0) {
+          send({ type: 'error', message: isUrl
+            ? 'ما لقيت ولا صورة بالصفحة — جرّب رابط فيه top_gallery_url أو فعّل Firecrawl بالإعدادات.'
+            : 'ما لقيت صور بالبحث — تأكد من مفتاح Google CSE (key+cx) أو Firecrawl بالإعدادات.' });
           controller.close(); return;
         }
+        const ex = { pageTitle, pageText, warnings: srcWarnings };
 
         // ── SELECT: download pool, measure real resolution, drop tiny/duplicates, rank ──
         send({ type: 'stage', stage: 'select', detail: 'قياس الدقّة واختيار الأفضل…' });
-        const pool = await selectPool(ex.imageUrls, s, log);
+        const pool = await selectPool(candidateUrls, s, log);
         if (pool.length === 0) { send({ type: 'error', message: 'ما في صور بدقّة كافية (كلها صغيرة/مكرّرة).' }); controller.close(); return; }
 
         // ── AI CURATE: pick the best shots (roles, drop junk) + write the copy, one call ──

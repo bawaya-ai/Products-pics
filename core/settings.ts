@@ -19,6 +19,9 @@ export interface Settings {
   openaiKey?: string;
   // extraction
   firecrawlKey?: string;
+  // web image search (by product name)
+  googleCseKey?: string;
+  googleCseCx?: string;
   // target store (kiss-play adapter)
   storeBase?: string;
   storeToken?: string;
@@ -52,6 +55,8 @@ export function resolveSettings(client: Partial<Settings> | undefined): Settings
   s.anthropicKey = e.ANTHROPIC_API_KEY || s.anthropicKey;
   s.openaiKey = e.OPENAI_API_KEY || s.openaiKey;
   s.firecrawlKey = e.FIRECRAWL_API_KEY || s.firecrawlKey;
+  s.googleCseKey = e.GOOGLE_CSE_KEY || s.googleCseKey;
+  s.googleCseCx = e.GOOGLE_CSE_CX || s.googleCseCx;
   s.storeBase = e.STORE_BASE || s.storeBase;
   s.storeToken = e.STORE_IMPORT_TOKEN || s.storeToken;
   return s;

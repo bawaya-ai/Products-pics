@@ -50,6 +50,25 @@ function harvest(html: string, add: (u: string) => void) {
   for (const m of html.matchAll(IMG_RE)) add(m[0]);
 }
 
+/** Standalone image-URL harvester (used by web-search result pages). Resolves
+ *  relative/protocol-relative URLs against baseHref, drops junk, dedupes by base. */
+export function collectImageUrls(html: string, baseHref: string, limit = 12): string[] {
+  const found = new Map<string, string>();
+  const order: string[] = [];
+  const add = (raw?: string) => {
+    if (!raw) return;
+    let u = decode(raw).trim();
+    if (u.startsWith('//')) u = 'https:' + u;
+    else if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, baseHref).href; } catch { return; } }
+    if (!/^https?:\/\//i.test(u) || JUNK.test(u)) return;
+    const b = baseKey(u);
+    if (!found.has(b)) { found.set(b, u); order.push(b); }
+    else if (u.length > found.get(b)!.length) found.set(b, u);
+  };
+  harvest(html, add);
+  return order.map((b) => found.get(b)!).slice(0, limit);
+}
+
 function pageTextFrom(html: string): { title: string; text: string } {
   const title =
     html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||

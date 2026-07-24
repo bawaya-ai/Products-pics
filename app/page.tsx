@@ -9,7 +9,7 @@ interface ClientSettings {
   size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
   bgMode: string; replicateKey: string; removebgKey: string;
   aiEnabled: boolean; anthropicKey: string; openaiKey: string; anthropicModel: string;
-  firecrawlKey: string;
+  firecrawlKey: string; googleCseKey: string; googleCseCx: string;
   storeBase: string; storeToken: string; category: string; publish: boolean;
   appPassword: string;
 }
@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS: ClientSettings = {
   size: 1024, quality: 88, format: 'webp', maxImages: 8,
   bgMode: 'auto', replicateKey: '', removebgKey: '',
   aiEnabled: true, anthropicKey: '', openaiKey: '', anthropicModel: 'claude-opus-4-8',
-  firecrawlKey: '',
+  firecrawlKey: '', googleCseKey: '', googleCseCx: '',
   storeBase: '', storeToken: '', category: 'toys', publish: true,
   appPassword: '',
 };
@@ -138,10 +138,13 @@ export default function Home() {
       {/* URL + run */}
       <div className="card">
         <div className="row">
-          <input className="grow" type="text" dir="ltr" placeholder="https://www.temu.com/…  الصق رابط المنتج"
+          <input className="grow" type="text" dir="ltr" placeholder="رابط منتج  أو  اكتب اسم منتج للبحث بالصور 🔎"
             value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()} />
-          <button className="btn-primary" onClick={run} disabled={busy || !url.trim()}>{busy ? '… شغّال' : '🚀 معالجة'}</button>
+          <button className="btn-primary" onClick={run} disabled={busy || !url.trim()}>
+            {busy ? '… شغّال' : /^https?:\/\//i.test(url.trim()) ? '🚀 معالجة' : '🔎 بحث ومعالجة'}
+          </button>
         </div>
+        <div className="hint" style={{ marginTop: 6 }}>الصق <b>رابط منتج</b> (تيمو/أي موقع)، أو اكتب <b>اسم منتج</b> ليبحث بالصور على الويب (يحتاج مفتاح Google CSE أو Firecrawl).</div>
         {(busy || progress > 0) && <div className="bar"><i style={{ width: `${progress}%` }} /></div>}
         {logLines.length > 0 && (
           <div className="log" ref={logRef}>
@@ -182,8 +185,12 @@ export default function Home() {
               <input type="password" dir="ltr" value={settings.anthropicKey} onChange={(e) => upd({ anthropicKey: e.target.value })} /></div>
             <div><label className="f">OpenAI Key (بديل)</label>
               <input type="password" dir="ltr" value={settings.openaiKey} onChange={(e) => upd({ openaiKey: e.target.value })} /></div>
-            <div><label className="f">Firecrawl Key — لمعرض كامل/مواقع صعبة</label>
+            <div><label className="f">Firecrawl Key — معرض كامل + بحث ويب</label>
               <input type="password" dir="ltr" value={settings.firecrawlKey} onChange={(e) => upd({ firecrawlKey: e.target.value })} /></div>
+            <div><label className="f">Google CSE Key — بحث صور بالويب</label>
+              <input type="password" dir="ltr" value={settings.googleCseKey} onChange={(e) => upd({ googleCseKey: e.target.value })} /></div>
+            <div><label className="f">Google CSE cx (معرّف المحرّك)</label>
+              <input type="text" dir="ltr" value={settings.googleCseCx} onChange={(e) => upd({ googleCseCx: e.target.value })} /></div>
             <div><label className="f">رابط متجر Kiss Play (API)</label>
               <input type="text" dir="ltr" placeholder="https://adult-store-api…workers.dev" value={settings.storeBase} onChange={(e) => upd({ storeBase: e.target.value })} /></div>
             <div><label className="f">Import Token تبع المتجر</label>
