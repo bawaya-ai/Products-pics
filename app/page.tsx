@@ -33,11 +33,50 @@ export default function Home() {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
+  const [envStatus, setEnvStatus] = useState<Record<string, boolean> | null>(null);
+  const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string }>>({});
+  const [testing, setTesting] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
+    fetch('/api/status').then((r) => r.json()).then((d) => setEnvStatus(d.env)).catch(() => {});
   }, []);
+
+  // provider registry for the status strip + test button
+  const PROVIDERS: { id: string; label: string; filled: (s: ClientSettings) => boolean }[] = [
+    { id: 'anthropic', label: 'Anthropic', filled: (s) => !!s.anthropicKey },
+    { id: 'removebg', label: 'remove.bg', filled: (s) => !!s.removebgKey },
+    { id: 'replicate', label: 'Replicate', filled: (s) => !!s.replicateKey },
+    { id: 'firecrawl', label: 'Firecrawl', filled: (s) => !!s.firecrawlKey },
+    { id: 'googleCse', label: 'Google CSE', filled: (s) => !!(s.googleCseKey && s.googleCseCx) },
+    { id: 'openai', label: 'OpenAI', filled: (s) => !!s.openaiKey },
+    { id: 'store', label: 'المتجر', filled: (s) => !!s.storeToken },
+  ];
+  // saved source per provider: 'server' (env) | 'browser' (UI) | 'none'
+  const savedSource = (id: string): 'server' | 'browser' | 'none' => {
+    if (envStatus?.[id]) return 'server';
+    if (PROVIDERS.find((p) => p.id === id)?.filled(settings)) return 'browser';
+    return 'none';
+  };
+
+  async function testKeys() {
+    if (testing) return;
+    setTesting(true); setTestRows({});
+    try {
+      const r = await fetch('/api/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
+        body: JSON.stringify({ settings }),
+      });
+      if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط' } }); setTesting(false); return; }
+      const d = await r.json();
+      const map: Record<string, { status: string; detail: string }> = {};
+      for (const row of d.rows || []) map[row.provider] = { status: row.status, detail: row.detail };
+      setTestRows(map);
+    } catch (e: any) { setTestRows({ _err: { status: 'fail', detail: String(e?.message) } }); }
+    setTesting(false);
+  }
   const upd = (patch: Partial<ClientSettings>) => {
     setSettings((s) => { const n = { ...s, ...patch }; try { localStorage.setItem(LS_KEY, JSON.stringify(n)); } catch {} return n; });
   };
@@ -155,8 +194,23 @@ export default function Home() {
 
       {/* Settings */}
       <div className="card">
+        {/* ── Keys status strip + test button ── */}
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+          <div className="chips">
+            {PROVIDERS.map((p) => {
+              const src = savedSource(p.id);
+              const t = testRows[p.id]?.status;
+              const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src === 'server' ? 'server' : src === 'browser' ? 'browser' : 'none';
+              const mark = t === 'ok' ? '✓' : t === 'fail' ? '✗' : src === 'server' ? '☁' : src === 'browser' ? '💾' : '—';
+              return <span key={p.id} className={`chip ${cls}`} title={testRows[p.id]?.detail || (src === 'server' ? 'محفوظ على السيرفر' : src === 'browser' ? 'محفوظ بالمتصفح' : 'غير مضبوط')}>{mark} {p.label}</span>;
+            })}
+          </div>
+          <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص المفاتيح'}</button>
+        </div>
+        {(testRows._auth || testRows._err) && <div className="result-err">{testRows._auth?.detail || testRows._err?.detail}</div>}
+
         <details className="settings">
-          <summary>⚙️ الإعدادات (مفاتيح، جودة، المتجر) — بتنحفظ بالمتصفح</summary>
+          <summary>⚙️ الإعدادات (مفاتيح، جودة، المتجر) — ☁ سيرفر · 💾 متصفح</summary>
           <div className="set-grid">
             <div><label className="f">حجم موحّد (px)</label>
               <select value={settings.size} onChange={(e) => upd({ size: +e.target.value })}>
