@@ -13,7 +13,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const TIME_BUDGET_MS = 52_000; // leave headroom under maxDuration
+const TIME_BUDGET_MS = 40_000; // stop early; leave headroom for AI enrich + flush under the 60s Vercel kill
 
 export async function POST(req: NextRequest) {
   if (!checkAppAuth(req)) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
@@ -32,6 +32,11 @@ export async function POST(req: NextRequest) {
       const send = (e: ProgressEvent) => controller.enqueue(enc.encode(JSON.stringify(e) + '\n'));
       const log = (m: string) => send({ type: 'stage', stage: 'log', detail: m });
       try {
+        // Warn early on search/listing/category pages — they yield mixed thumbnails, not one product.
+        if (/\b(search_result|search_key|\/search|category|list\.html|goods_list)\b/i.test(url)) {
+          send({ type: 'warn', message: 'هذا رابط بحث/تصنيف — بيسحب صور منتجات مخلوطة. الأفضل رابط منتج واحد (goods.html / -g-رقم).' });
+        }
+
         send({ type: 'stage', stage: 'extract', detail: 'استخراج الصور من الصفحة…' });
         const ex = await extractMedia(url, s, log);
         ex.warnings.forEach((w) => send({ type: 'warn', message: w }));
