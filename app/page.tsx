@@ -40,7 +40,12 @@ export default function Home() {
   const [envStatus, setEnvStatus] = useState<Record<string, boolean> | null>(null);
   const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string }>>({});
   const [testing, setTesting] = useState(false);
+  const [saved, setSaved] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  function saveSettings() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); setSaved(true); setTimeout(() => setSaved(false), 2500); } catch {}
+  }
 
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
@@ -220,22 +225,70 @@ export default function Home() {
     setBusy(false);
   }
 
+  // slug for a clean folder name per product
+  function slugify(s: string, fallback = 'product') {
+    const base = (s || '').normalize('NFKD').replace(/[^\w؀-ۿ\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 50);
+    return base || fallback;
+  }
+  function descriptionMd(m: Manifest): string {
+    const t = m.tags?.length ? m.tags.join(' · ') : '—';
+    const price = m.price.amount ? `₪${m.price.amount}` : '—';
+    return [
+      `# ${m.name.ar || m.name.en || m.pageTitle}`, '',
+      `**Name (EN):** ${m.name.en || '—'}`,
+      `**שם (HE):** ${m.name.he || '—'}`,
+      `**السعر:** ${price}   ·   **القسم:** ${m.category}`,
+      `**الوسوم:** ${t}`, '',
+      '## الوصف (عربي)', m.description.ar || '—', '',
+      '## Description (EN)', m.description.en || '—', '',
+      '## תיאור (HE)', m.description.he || '—', '',
+      '---', `المصدر: ${m.sourceUrl}`, `عدد الصور: ${m.images.filter((i) => i.role !== 'skip').length}`, '',
+    ].join('\n');
+  }
+  // add one product as a tidy folder: main/angle/detail images + description.md + manifest.json
+  function addProductFolder(zip: any, m: Manifest, folderName: string) {
+    const f = zip.folder(folderName)!;
+    const kept = m.images.filter((i) => i.role !== 'skip');
+    let a = 0, d = 0;
+    kept.forEach((img) => {
+      const ext = img.dataUrl.includes('image/png') ? 'png' : 'webp';
+      const name = img.role === 'main' ? `main.${ext}` : img.role === 'detail' ? `detail-${++d}.${ext}` : `angle-${++a}.${ext}`;
+      f.file(name, img.dataUrl.split(',')[1], { base64: true });
+    });
+    f.file('description.md', descriptionMd(m));
+    f.file('manifest.json', JSON.stringify({ ...m, images: kept.map(({ dataUrl, ...rest }) => rest) }, null, 2));
+  }
+
   async function downloadZip(m: Manifest) {
     const JSZip = (await import('jszip')).default;
     const zip = new JSZip();
-    const kept = m.images.filter((i) => i.role !== 'skip');
-    kept.forEach((img, idx) => {
-      const ext = img.dataUrl.includes('image/png') ? 'png' : 'webp';
-      const name = img.role === 'main' ? `main.${ext}` : `${img.role}-${idx}.${ext}`;
-      zip.file(name, img.dataUrl.split(',')[1], { base64: true });
-    });
-    zip.file('manifest.json', JSON.stringify({ ...m, images: kept.map(({ dataUrl, ...rest }) => rest) }, null, 2));
+    addProductFolder(zip, m, slugify(m.name.en || m.name.ar));
     const blob = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `product-${Date.now()}.zip`;
+    a.download = `${slugify(m.name.en || m.name.ar)}.zip`;
     a.click();
-    setSaveMsg({ ok: true, text: '✓ تنزّل ZIP (صور + manifest.json)' });
+    setSaveMsg({ ok: true, text: '✓ تنزّل مجلد المنتج (صور + description.md + manifest.json)' });
+  }
+
+  // one ZIP, a folder per crawled product
+  async function downloadAllProducts() {
+    const items = products.filter((p) => !p.skipped);
+    if (!items.length) return;
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    const used = new Set<string>();
+    items.forEach((p, i) => {
+      let name = slugify(p.manifest.name.en || p.manifest.name.ar, `product-${i + 1}`);
+      while (used.has(name)) name = `${name}-${i + 1}`;
+      used.add(name);
+      addProductFolder(zip, p.manifest, name);
+    });
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `products-${items.length}.zip`;
+    a.click();
   }
 
   return (
@@ -273,67 +326,80 @@ export default function Home() {
         )}
       </div>
 
-      {/* Settings */}
+      {/* ── Integrations panel ── */}
       <div className="card">
-        {/* ── Keys status strip + test button ── */}
-        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-          <div className="chips">
-            {PROVIDERS.map((p) => {
-              const src = savedSource(p.id);
-              const t = testRows[p.id]?.status;
-              const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src === 'server' ? 'server' : src === 'browser' ? 'browser' : 'none';
-              const mark = t === 'ok' ? '✓' : t === 'fail' ? '✗' : src === 'server' ? '☁' : src === 'browser' ? '💾' : '—';
-              return <span key={p.id} className={`chip ${cls}`} title={testRows[p.id]?.detail || (src === 'server' ? 'محفوظ على السيرفر' : src === 'browser' ? 'محفوظ بالمتصفح' : 'غير مضبوط')}>{mark} {p.label}</span>;
-            })}
+        <div className="ihead">
+          <strong>🧩 التكاملات</strong>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص الكل'}</button>
+            <button className="btn-gold" onClick={saveSettings} style={{ padding: '8px 18px' }}>💾 حفظ</button>
           </div>
-          <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص المفاتيح'}</button>
         </div>
+        {saved && <div className="result-ok">✓ انحفظت التكاملات بالمتصفح · المفاتيح الأساسية ☁ محفوظة على السيرفر ما بتضيع.</div>}
         {(testRows._auth || testRows._err) && <div className="result-err">{testRows._auth?.detail || testRows._err?.detail}</div>}
 
-        <details className="settings">
-          <summary>⚙️ الإعدادات (مفاتيح، جودة، المتجر) — ☁ سيرفر · 💾 متصفح</summary>
-          <div className="set-grid">
-            <div><label className="f">حجم موحّد (px)</label>
-              <select value={settings.size} onChange={(e) => upd({ size: +e.target.value })}>
-                {[800, 1024, 1500].map((v) => <option key={v} value={v}>{v}×{v}</option>)}
-              </select></div>
-            <div><label className="f">الصيغة</label>
-              <select value={settings.format} onChange={(e) => upd({ format: e.target.value as any })}>
-                <option value="webp">WebP (أخف)</option><option value="png">PNG (توافق أعلى)</option>
-              </select></div>
-            <div><label className="f">أقصى عدد صور</label>
-              <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: +e.target.value })} /></div>
+        {[
+          { title: '🔎 البحث عن الصور', rows: [
+            { id: 'firecrawl', label: 'Firecrawl', fields: [{ k: 'firecrawlKey', ph: 'fc-…' }], hint: 'بحث بالاسم · معرض كامل · زحف على القوائم' },
+            { id: 'googleCse', label: 'Google CSE', fields: [{ k: 'googleCseKey', ph: 'AIza…' }, { k: 'googleCseCx', ph: 'cx (معرّف المحرّك)', type: 'text' }], hint: 'بديل للبحث — محجوب على مؤسستك حاليًا' },
+          ] },
+          { title: '✂️ إزالة الخلفية', rows: [
+            { id: 'replicate', label: 'Replicate', fields: [{ k: 'replicateKey', ph: 'r8_…' }], hint: 'أعلى جودة قصّ (اختياري)' },
+            { id: 'removebg', label: 'remove.bg', fields: [{ k: 'removebgKey', ph: '…' }], hint: 'اختياري · المجاني المحلي شغّال بدون مفتاح' },
+          ] },
+          { title: '🧠 الذكاء — اسم/وصف/اختيار الصور', rows: [
+            { id: 'anthropic', label: 'Anthropic · Claude', fields: [{ k: 'anthropicKey', ph: 'sk-ant-…' }], hint: 'الأساسي' },
+            { id: 'openai', label: 'OpenAI', fields: [{ k: 'openaiKey', ph: 'sk-…' }], hint: 'بديل' },
+          ] },
+          { title: '🏪 المتجر — حفظ المنتجات', rows: [
+            { id: 'store', label: 'المتجر', fields: [{ k: 'storeBase', ph: 'https://…workers.dev', type: 'text' }, { k: 'storeToken', ph: 'Import Token' }], hint: 'رابط الـAPI + توكن الاستيراد' },
+          ] },
+        ].map((g) => (
+          <div key={g.title} className="igroup">
+            <div className="igtitle">{g.title}</div>
+            {g.rows.map((r) => {
+              const src = savedSource(r.id);
+              const t = testRows[r.id]?.status;
+              const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src === 'server' ? 'server' : src === 'browser' ? 'browser' : 'none';
+              const mark = t === 'ok' ? '✓ فعّال' : t === 'fail' ? '✗ فشل' : src === 'server' ? '☁ سيرفر' : src === 'browser' ? '💾 محفوظ' : '— ناقص';
+              return (
+                <div key={r.id} className="irow">
+                  <div className="ilabel"><span>{r.label}</span><span className={`chip ${cls}`} title={testRows[r.id]?.detail || ''}>{mark}</span></div>
+                  {src === 'server' ? (
+                    <div className="iserver">☁ محفوظ على السيرفر — ما بتحتاج تكتبه.</div>
+                  ) : (
+                    <div className="ifields">
+                      {r.fields.map((f: any) => (
+                        <input key={f.k} type={f.type === 'text' ? 'text' : 'password'} dir="ltr" placeholder={f.ph}
+                          value={(settings as any)[f.k]} onChange={(e) => upd({ [f.k]: e.target.value } as any)} />
+                      ))}
+                    </div>
+                  )}
+                  <div className="hint">{r.hint}</div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+
+        <div className="igroup">
+          <div className="igtitle">🎛️ الإخراج والخيارات</div>
+          <div className="ioptions">
             <div><label className="f">إزالة الخلفية</label>
               <select value={settings.bgMode} onChange={(e) => upd({ bgMode: e.target.value })}>
-                <option value="auto">تلقائي (الأفضل المتاح)</option>
-                <option value="local">مجاني محلي (U²-Net)</option>
-                <option value="replicate">Replicate (أعلى جودة)</option>
-                <option value="removebg">remove.bg</option>
-                <option value="off">بدون إزالة</option>
-              </select>
-              <div className="hint">مجاني مدمج · Replicate أدق (بمفتاح)</div></div>
-            <div><label className="f">Replicate API Key (اختياري)</label>
-              <input type="password" dir="ltr" value={settings.replicateKey} onChange={(e) => upd({ replicateKey: e.target.value })} /></div>
-            <div><label className="f">remove.bg Key (اختياري)</label>
-              <input type="password" dir="ltr" value={settings.removebgKey} onChange={(e) => upd({ removebgKey: e.target.value })} /></div>
-            <div><label className="f">Anthropic Key — للاسم/الوصف/التصنيف</label>
-              <input type="password" dir="ltr" value={settings.anthropicKey} onChange={(e) => upd({ anthropicKey: e.target.value })} /></div>
-            <div><label className="f">OpenAI Key (بديل)</label>
-              <input type="password" dir="ltr" value={settings.openaiKey} onChange={(e) => upd({ openaiKey: e.target.value })} /></div>
-            <div><label className="f">Firecrawl Key — معرض كامل + بحث ويب</label>
-              <input type="password" dir="ltr" value={settings.firecrawlKey} onChange={(e) => upd({ firecrawlKey: e.target.value })} /></div>
-            <div><label className="f">Google CSE Key — بحث صور بالويب</label>
-              <input type="password" dir="ltr" value={settings.googleCseKey} onChange={(e) => upd({ googleCseKey: e.target.value })} /></div>
-            <div><label className="f">Google CSE cx (معرّف المحرّك)</label>
-              <input type="text" dir="ltr" value={settings.googleCseCx} onChange={(e) => upd({ googleCseCx: e.target.value })} /></div>
-            <div><label className="f">رابط متجر Kiss Play (API)</label>
-              <input type="text" dir="ltr" placeholder="https://adult-store-api…workers.dev" value={settings.storeBase} onChange={(e) => upd({ storeBase: e.target.value })} /></div>
-            <div><label className="f">Import Token تبع المتجر</label>
-              <input type="password" dir="ltr" value={settings.storeToken} onChange={(e) => upd({ storeToken: e.target.value })} /></div>
-            <div><label className="f">كلمة سر الأداة (لو مفعّلة)</label>
+                <option value="auto">تلقائي (الأفضل)</option><option value="local">مجاني محلي</option>
+                <option value="replicate">Replicate</option><option value="removebg">remove.bg</option><option value="off">بدون</option>
+              </select></div>
+            <div><label className="f">حجم موحّد</label>
+              <select value={settings.size} onChange={(e) => upd({ size: +e.target.value })}>{[800, 1024, 1500].map((v) => <option key={v} value={v}>{v}×{v}</option>)}</select></div>
+            <div><label className="f">الصيغة</label>
+              <select value={settings.format} onChange={(e) => upd({ format: e.target.value as any })}><option value="webp">WebP</option><option value="png">PNG</option></select></div>
+            <div><label className="f">أقصى صور</label>
+              <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: +e.target.value })} /></div>
+            <div><label className="f">كلمة سر الأداة</label>
               <input type="password" dir="ltr" value={settings.appPassword} onChange={(e) => upd({ appPassword: e.target.value })} /></div>
           </div>
-        </details>
+        </div>
       </div>
 
       {/* Crawl results — one card per product */}
@@ -341,7 +407,10 @@ export default function Home() {
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
             <strong>🧺 منتجات مسحوبة: {products.length} {busy ? '(عم يكمّل…)' : ''}</strong>
-            <button className="btn-gold" onClick={saveAllProducts} disabled={busy || products.every((p) => p.saved || p.skipped)} style={{ padding: '9px 18px' }}>💾 حفظ الكل بالمتجر</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn-ghost" onClick={downloadAllProducts} disabled={products.every((p) => p.skipped)} style={{ padding: '9px 16px' }}>⬇️ تنزيل الكل (مجلدات)</button>
+              <button className="btn-gold" onClick={saveAllProducts} disabled={busy || products.every((p) => p.saved || p.skipped)} style={{ padding: '9px 18px' }}>💾 حفظ الكل بالمتجر</button>
+            </div>
           </div>
           <div className="pgrid">
             {products.map((p, idx) => {

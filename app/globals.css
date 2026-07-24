@@ -86,5 +86,20 @@ a { color: var(--gold); }
 .pt.pt-main img { border-color: var(--gold); }
 .pt select { padding: 2px; font-size: 11px; margin-top: 2px; width: 72px; }
 .pcard .chip.ok a { margin-inline-start: 6px; }
+
+/* Integrations panel */
+.ihead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.ihead strong { font-size: 16px; color: var(--gold); }
+.igroup { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-top: 12px; background: rgba(255,255,255,0.015); }
+.igtitle { font-size: 13.5px; font-weight: 700; color: var(--text); margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.irow { display: grid; grid-template-columns: 190px 1fr; gap: 10px 14px; align-items: center; padding: 8px 0; }
+.irow + .irow { border-top: 1px dashed rgba(200,161,90,0.12); }
+.ilabel { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+.ifields { display: flex; gap: 8px; flex-wrap: wrap; }
+.ifields input { flex: 1 1 160px; }
+.iserver { font-size: 12.5px; color: var(--ok); align-self: center; }
+.irow .hint { grid-column: 2; margin-top: 0; }
+.ioptions { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 14px; }
+@media (max-width: 640px) { .irow { grid-template-columns: 1fr; } .irow .hint { grid-column: 1; } }
 .langs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 @media (max-width: 720px) { .langs { grid-template-columns: 1fr; } }
