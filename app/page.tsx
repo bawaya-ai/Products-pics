@@ -41,6 +41,7 @@ export default function Home() {
   const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string }>>({});
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showInt, setShowInt] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   function saveSettings() {
@@ -328,12 +329,14 @@ export default function Home() {
 
       {/* ── Integrations panel ── */}
       <div className="card">
-        <div className="ihead">
-          <strong>🧩 التكاملات</strong>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص الكل'}</button>
-            <button className="btn-gold" onClick={saveSettings} style={{ padding: '8px 18px' }}>💾 حفظ</button>
-          </div>
+        <div className="ihead ihead-toggle" onClick={() => setShowInt((v) => !v)}>
+          <strong>🧩 التكاملات <span className="imini">· {PROVIDERS.filter((p) => savedSource(p.id) !== 'none').length}/{PROVIDERS.length} مضبوطة</span></strong>
+          <span className="itoggle">{showInt ? '▲ إخفاء' : '⚙️ إعداد'}</span>
+        </div>
+        {showInt && (<>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+          <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص الكل'}</button>
+          <button className="btn-gold" onClick={saveSettings} style={{ padding: '8px 18px' }}>💾 حفظ</button>
         </div>
         {saved && <div className="result-ok">✓ انحفظت التكاملات بالمتصفح · المفاتيح الأساسية ☁ محفوظة على السيرفر ما بتضيع.</div>}
         {(testRows._auth || testRows._err) && <div className="result-err">{testRows._auth?.detail || testRows._err?.detail}</div>}
@@ -400,6 +403,7 @@ export default function Home() {
               <input type="password" dir="ltr" value={settings.appPassword} onChange={(e) => upd({ appPassword: e.target.value })} /></div>
           </div>
         </div>
+        </>)}
       </div>
 
       {/* Crawl results — one card per product */}
