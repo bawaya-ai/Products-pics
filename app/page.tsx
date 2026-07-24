@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS: ClientSettings = {
   storeBase: '', storeToken: '', category: 'toys', publish: true,
   appPassword: '',
 };
+interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
 const CATEGORIES = ['toys', 'lingerie', 'couples', 'oils-care', 'gifts', 'offers'];
 const LS_KEY = 'scraper-pro-settings-v1';
 
@@ -31,6 +32,9 @@ export default function Home() {
   const [logLines, setLogLines] = useState<{ t: string; c?: string }[]>([]);
   const [progress, setProgress] = useState(0);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [crawl, setCrawl] = useState(false);
+  const [crawlLimit] = useState(12);
+  const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
   const [envStatus, setEnvStatus] = useState<Record<string, boolean> | null>(null);
@@ -86,17 +90,17 @@ export default function Home() {
     setTimeout(() => logRef.current?.scrollTo(0, 1e6), 30);
   };
 
-  async function run() {
-    if (!url.trim() || busy) return;
-    setBusy(true); setManifest(null); setSaveMsg(null); setLogLines([]); setProgress(4);
-    pushLog('▶ starting…');
+  // Stream one /api/scrape call; push progress to the log; resolve with the manifest.
+  async function scrapeUrl(u: string, tag = ''): Promise<Manifest | null> {
+    let manifestOut: Manifest | null = null;
+    const pre = tag ? `${tag} ` : '';
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
-        body: JSON.stringify({ url: url.trim(), settings }),
+        body: JSON.stringify({ url: u, settings }),
       });
-      if (!res.ok || !res.body) { pushLog(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`, 'err'); setBusy(false); return; }
+      if (!res.ok || !res.body) { pushLog(`${pre}HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`, 'err'); return null; }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -108,24 +112,58 @@ export default function Home() {
         while ((nl = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
           if (!line) continue;
-          try { handleEvent(JSON.parse(line) as ProgressEvent); } catch {}
+          let e: ProgressEvent; try { e = JSON.parse(line); } catch { continue; }
+          if (e.type === 'stage') { if (e.detail) pushLog(`${pre}— ${e.detail}`); if (e.stage === 'enrich' || e.stage === 'curate') setProgress(82); }
+          else if (e.type === 'image') {
+            setProgress(10 + Math.round(((e.index + (e.status === 'done' ? 1 : 0.4)) / e.total) * 65));
+            if (e.status === 'done') pushLog(`${pre}✓ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'ok');
+            else if (e.status === 'failed') pushLog(`${pre}✗ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'err');
+          }
+          else if (e.type === 'warn') pushLog(`${pre}⚠ ${e.message}`, 'warn');
+          else if (e.type === 'error') { pushLog(`${pre}✗ ${e.message}`, 'err'); setProgress(0); }
+          else if (e.type === 'result') { manifestOut = e.manifest; setProgress(100); }
         }
       }
-    } catch (e: any) { pushLog(`✗ ${e?.message}`, 'err'); }
+    } catch (e: any) { pushLog(`${pre}✗ ${e?.message}`, 'err'); }
+    return manifestOut;
+  }
+
+  async function run() {
+    if (!url.trim() || busy) return;
+    if (crawl && /^https?:\/\//i.test(url.trim())) return runCrawl();
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4);
+    pushLog('▶ بدأنا…');
+    const m = await scrapeUrl(url.trim());
+    if (m) { setManifest(m); pushLog('✓ جاهز للمعاينة', 'ok'); }
     setBusy(false);
   }
 
-  function handleEvent(e: ProgressEvent) {
-    if (e.type === 'stage') { pushLog(e.detail ? `— ${e.detail}` : `— ${e.stage}`); if (e.stage === 'enrich') setProgress(82); }
-    else if (e.type === 'image') {
-      const pct = 10 + Math.round(((e.index + (e.status === 'done' ? 1 : 0.4)) / e.total) * 65);
-      setProgress(pct);
-      if (e.status === 'done') pushLog(`✓ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'ok');
-      else if (e.status === 'failed') pushLog(`✗ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'err');
-    }
-    else if (e.type === 'warn') pushLog(`⚠ ${e.message}`, 'warn');
-    else if (e.type === 'error') { pushLog(`✗ ${e.message}`, 'err'); setProgress(0); }
-    else if (e.type === 'result') { setManifest(e.manifest); setProgress(100); pushLog('✓ جاهز للمعاينة', 'ok'); }
+  // Crawl a listing: discover product urls, then scrape each into a product list.
+  async function runCrawl() {
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2);
+    pushLog('▶ زحف على القائمة — بكتشف روابط المنتجات…');
+    try {
+      const dres = await fetch('/api/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
+        body: JSON.stringify({ url: url.trim(), settings, limit: crawlLimit }),
+      });
+      if (dres.status === 401) { pushLog('كلمة سر الأداة غلط', 'err'); setBusy(false); return; }
+      const d = await dres.json();
+      (d.warnings || []).forEach((w: string) => pushLog(`⚠ ${w}`, 'warn'));
+      const urls: string[] = (d.productUrls || []).slice(0, crawlLimit);
+      if (!urls.length) { pushLog('✗ ما لقيت روابط منتجات بالصفحة — جرّب رابط قائمة/تصنيف فيه منتجات.', 'err'); setBusy(false); return; }
+      pushLog(`🔎 لقيت ${urls.length} منتج — عم أسحبهن…`, 'ok');
+      const acc: CrawlItem[] = [];
+      for (let i = 0; i < urls.length; i++) {
+        pushLog(`— (${i + 1}/${urls.length}) ${urls[i].replace(/^https?:\/\/[^/]+/, '')}`);
+        const m = await scrapeUrl(urls[i], `[${i + 1}/${urls.length}]`);
+        if (m && m.images.length) { acc.push({ manifest: m }); setProducts([...acc]); }
+      }
+      pushLog(`✓ خلص — ${acc.length}/${urls.length} منتج جاهز.`, 'ok');
+      setProgress(100);
+    } catch (e: any) { pushLog(`✗ ${e?.message}`, 'err'); }
+    setBusy(false);
   }
 
   const setRole = (id: string, role: MediaRole) =>
@@ -133,20 +171,52 @@ export default function Home() {
   const setField = (path: 'name' | 'description', lang: 'en' | 'ar' | 'he', v: string) =>
     setManifest((m) => m && { ...m, [path]: { ...m[path], [lang]: v } });
 
-  async function save() {
-    if (!manifest || busy) return;
-    setBusy(true); setSaveMsg(null);
-    if (adapter === 'json') { await downloadZip(manifest); setBusy(false); return; }
+  async function postSave(m: Manifest): Promise<{ ok: boolean; productId?: string; productUrl?: string; error?: string }> {
     try {
       const r = await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
-        body: JSON.stringify({ manifest, adapter, settings }),
+        body: JSON.stringify({ manifest: m, adapter: 'kiss-play', settings }),
       });
-      const d = await r.json();
-      if (d.ok) setSaveMsg({ ok: true, text: `✓ انحفظ بالمتجر — ${d.productId}`, link: d.productUrl });
-      else setSaveMsg({ ok: false, text: `فشل الحفظ: ${d.error || r.status}` });
-    } catch (e: any) { setSaveMsg({ ok: false, text: `فشل الحفظ: ${e?.message}` }); }
+      return await r.json();
+    } catch (e: any) { return { ok: false, error: e?.message }; }
+  }
+
+  async function save() {
+    if (!manifest || busy) return;
+    setBusy(true); setSaveMsg(null);
+    if (adapter === 'json') { await downloadZip(manifest); setBusy(false); return; }
+    const d = await postSave(manifest);
+    setSaveMsg(d.ok ? { ok: true, text: `✓ انحفظ بالمتجر — ${d.productId}`, link: d.productUrl } : { ok: false, text: `فشل الحفظ: ${d.error || 'خطأ'}` });
+    setBusy(false);
+  }
+
+  // ── Crawl-product edits + saves ──
+  const patchProduct = (idx: number, fn: (m: Manifest) => Manifest) =>
+    setProducts((ps) => ps.map((p, i) => (i === idx ? { ...p, manifest: fn(p.manifest) } : p)));
+  const setPName = (idx: number, v: string) => patchProduct(idx, (m) => ({ ...m, name: { ...m.name, ar: v } }));
+  const setPCat = (idx: number, v: string) => patchProduct(idx, (m) => ({ ...m, category: v }));
+  const setPPrice = (idx: number, v: string) => patchProduct(idx, (m) => ({ ...m, price: { ...m.price, amount: v ? +v : null } }));
+  const setPRole = (idx: number, imgId: string, role: MediaRole) =>
+    patchProduct(idx, (m) => ({ ...m, images: m.images.map((i) => (i.id === imgId ? { ...i, role } : role === 'main' && i.role === 'main' ? { ...i, role: 'angle' } : i)) }));
+  const skipProduct = (idx: number) => setProducts((ps) => ps.map((p, i) => (i === idx ? { ...p, skipped: !p.skipped } : p)));
+
+  async function saveProduct(idx: number) {
+    const p = products[idx];
+    if (!p || p.saving || p.saved) return;
+    setProducts((ps) => ps.map((x, i) => (i === idx ? { ...x, saving: true } : x)));
+    const d = await postSave(p.manifest);
+    setProducts((ps) => ps.map((x, i) => (i === idx ? { ...x, saving: false, saved: d.ok ? d.productId : undefined, savedLink: d.productUrl, ...(d.ok ? {} : {}) } : x)));
+    if (!d.ok) pushLog(`✗ حفظ منتج ${idx + 1}: ${d.error || 'خطأ'}`, 'err');
+  }
+
+  async function saveAllProducts() {
+    if (busy) return;
+    setBusy(true);
+    for (let i = 0; i < products.length; i++) {
+      if (products[i].skipped || products[i].saved) continue;
+      await saveProduct(i);
+    }
     setBusy(false);
   }
 
@@ -181,10 +251,20 @@ export default function Home() {
           <input className="grow" type="text" dir="ltr" placeholder="رابط منتج  أو  اكتب اسم منتج للبحث بالصور 🔎"
             value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()} />
           <button className="btn-primary" onClick={run} disabled={busy || !url.trim()}>
-            {busy ? '… شغّال' : /^https?:\/\//i.test(url.trim()) ? '🚀 معالجة' : '🔎 بحث ومعالجة'}
+            {busy ? '… شغّال' : crawl && /^https?:\/\//i.test(url.trim()) ? '📑 اسحب كل المنتجات' : /^https?:\/\//i.test(url.trim()) ? '🚀 معالجة' : '🔎 بحث ومعالجة'}
           </button>
         </div>
-        <div className="hint" style={{ marginTop: 6 }}>الصق <b>رابط منتج</b> (تيمو/أي موقع)، أو اكتب <b>اسم منتج</b> ليبحث بالصور على الويب (يحتاج مفتاح Google CSE أو Firecrawl).</div>
+        <div className="row" style={{ marginTop: 8, justifyContent: 'space-between' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', color: crawl ? 'var(--gold)' : 'var(--muted)' }}>
+            <input type="checkbox" checked={crawl} onChange={(e) => setCrawl(e.target.checked)} style={{ width: 'auto' }} />
+            📑 زحف: افتح كل منتجات صفحة القائمة/التصنيف واسحبهن (حتى {crawlLimit})
+          </label>
+        </div>
+        <div className="hint" style={{ marginTop: 4 }}>
+          {crawl
+            ? 'الصق رابط صفحة قائمة/تصنيف/الأكثر مبيعًا — الأداة بتفتح كل منتج وتسحبه لحاله.'
+            : 'الصق رابط منتج (تيمو/أي موقع)، أو اكتب اسم منتج للبحث بالصور، أو فعّل الزحف لسحب صفحة كاملة.'}
+        </div>
         {(busy || progress > 0) && <div className="bar"><i style={{ width: `${progress}%` }} /></div>}
         {logLines.length > 0 && (
           <div className="log" ref={logRef}>
@@ -256,7 +336,54 @@ export default function Home() {
         </details>
       </div>
 
-      {/* Preview + edit */}
+      {/* Crawl results — one card per product */}
+      {products.length > 0 && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+            <strong>🧺 منتجات مسحوبة: {products.length} {busy ? '(عم يكمّل…)' : ''}</strong>
+            <button className="btn-gold" onClick={saveAllProducts} disabled={busy || products.every((p) => p.saved || p.skipped)} style={{ padding: '9px 18px' }}>💾 حفظ الكل بالمتجر</button>
+          </div>
+          <div className="pgrid">
+            {products.map((p, idx) => {
+              const kept = p.manifest.images.filter((i) => i.role !== 'skip');
+              return (
+                <div key={idx} className="pcard" style={p.skipped ? { opacity: 0.4 } : {}}>
+                  <div className="pthumbs">
+                    {p.manifest.images.map((img) => (
+                      <div key={img.id} className={`pt ${img.role === 'main' ? 'pt-main' : ''}`} style={img.role === 'skip' ? { opacity: 0.35 } : {}}>
+                        <img src={img.dataUrl} alt="" />
+                        <select value={img.role} onChange={(e) => setPRole(idx, img.id, e.target.value as MediaRole)}>
+                          <option value="main">⭐</option><option value="angle">زاوية</option><option value="detail">تفصيل</option><option value="skip">🗑</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  <input type="text" value={p.manifest.name.ar} onChange={(e) => setPName(idx, e.target.value)} placeholder="اسم المنتج" style={{ marginTop: 6 }} />
+                  <div className="row" style={{ marginTop: 6 }}>
+                    <input type="number" value={p.manifest.price.amount ?? ''} onChange={(e) => setPPrice(idx, e.target.value)} placeholder="₪ سعر" style={{ width: 90 }} />
+                    <select value={p.manifest.category} onChange={(e) => setPCat(idx, e.target.value)} style={{ flex: 1 }}>
+                      {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="row" style={{ marginTop: 7 }}>
+                    {p.saved ? (
+                      <span className="chip ok" style={{ flex: 1 }}>✓ محفوظ {p.savedLink && <a href={p.savedLink} target="_blank" rel="noreferrer">فتح ↗</a>}</span>
+                    ) : (
+                      <>
+                        <button className="btn-primary" onClick={() => saveProduct(idx)} disabled={p.saving || p.skipped} style={{ flex: 1, padding: '8px' }}>{p.saving ? '…' : '💾 حفظ'}</button>
+                        <button className="btn-ghost" onClick={() => skipProduct(idx)} style={{ padding: '8px 12px' }}>{p.skipped ? '↩' : '🗑'}</button>
+                      </>
+                    )}
+                  </div>
+                  <div className="hint" style={{ marginTop: 4, direction: 'ltr', textAlign: 'left' }}>{kept.length} صورة · {kept[0] ? kept[0].bgProvider : ''}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Preview + edit (single) */}
       {manifest && (
         <>
           <div className="card">

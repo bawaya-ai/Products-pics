@@ -76,5 +76,15 @@ a { color: var(--gold); }
 .chip.server { background: rgba(200, 161, 90, 0.16); color: var(--gold); border-color: rgba(200, 161, 90, 0.45); }
 .chip.browser { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; }
 .chip.none { color: var(--muted); opacity: 0.7; }
+
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.pcard { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.pthumbs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.pt { flex: 0 0 auto; width: 72px; text-align: center; }
+.pt img { width: 72px; height: 72px; object-fit: contain; border-radius: 7px; border: 1px solid var(--line);
+  background: repeating-conic-gradient(#2a2a2a 0% 25%, #1a1a1a 0% 50%) 50% / 12px 12px; }
+.pt.pt-main img { border-color: var(--gold); }
+.pt select { padding: 2px; font-size: 11px; margin-top: 2px; width: 72px; }
+.pcard .chip.ok a { margin-inline-start: 6px; }
 .langs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 @media (max-width: 720px) { .langs { grid-template-columns: 1fr; } }

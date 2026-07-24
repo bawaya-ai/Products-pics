@@ -162,6 +162,42 @@ export async function extractMedia(
   return { imageUrls, pageTitle: title, pageText: text, usedFirecrawl, warnings };
 }
 
+// ── Product-link discovery (for listing/category/bestsellers pages) ─────────
+const LINK_JUNK =
+  /(\/(about|affiliate|contact|policy|information|warranty|labels?|categor|deals?|careers?|press|blog|support|faq|privacy|terms|cookie|sitemap|stores?|company|account|login|register|cart|checkout|wishlist|help|shipping|returns?|gift-?card|newsletter|size-?guide|reviews?)\b|\/(pages?|blogs?|policies|collections)\/|#|javascript:|mailto:|tel:|\.pdf)/i;
+
+/** Extract likely PRODUCT-PAGE urls from a listing page: anchors that wrap a
+ *  product image, same-host, minus nav/category/policy links. Generic across stores. */
+export function collectProductLinks(html: string, baseHref: string, limit = 24): string[] {
+  let host = '';
+  try { host = new URL(baseHref).host; } catch {}
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw: string) => {
+    let u = raw.trim();
+    if (u.startsWith('//')) u = 'https:' + u;
+    else if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, baseHref).href; } catch { return; } }
+    let parsed: URL;
+    try { parsed = new URL(u); } catch { return; }
+    if (host && parsed.host !== host) return;              // same store only
+    if (LINK_JUNK.test(parsed.pathname)) return;
+    const path = parsed.pathname.replace(/\/+$/, '');
+    if (!path || path === '/' || path.split('/').filter(Boolean).length === 0) return; // homepage/nav
+    const key = parsed.origin + path;                      // dedupe ignoring query
+    if (seen.has(key)) return;
+    seen.add(key); out.push(parsed.origin + parsed.pathname + parsed.search);
+  };
+  // A) product-card container markers → the first anchor inside (works on Lelo/Shopify/etc.)
+  for (const m of html.matchAll(/(?:product[-_]?(?:card|tile|item|thumb|grid-item)|data-test=["']product|itemtype=["'][^"']*Product)[^>]*>[\s\S]{0,500}?<a\b[^>]*href=["']([^"'#\s]+)["']/gi)) add(m[1]);
+  // B) anchors that wrap an <img> within a short span
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#\s]+)["'][^>]*>(?:(?!<\/a>)[\s\S]){0,700}?<img\b/gi)) add(m[1]);
+  // C) hidden "Go to the … page" product links
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#\s]+)["'][^>]*>\s*(?:go to|view|shop)\b[^<]*\bpage\b/gi)) add(m[1]);
+  // D) JSON-embedded product urls (SPA data blobs)
+  for (const m of html.matchAll(/"(?:url|handle|productUrl|href|link)"\s*:\s*"((?:https?:\/\/[^"']+|\/)[a-z0-9][a-z0-9\-\/]{2,60})"/gi)) add(m[1]);
+  return out.slice(0, limit);
+}
+
 /** Fetch one image with safety caps. Returns null on failure. */
 export async function fetchImage(url: string): Promise<{ buf: Buffer; contentType: string } | null> {
   try {
