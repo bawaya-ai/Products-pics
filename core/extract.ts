@@ -69,6 +69,19 @@ export function collectImageUrls(html: string, baseHref: string, limit = 12): st
   return order.map((b) => found.get(b)!).slice(0, limit);
 }
 
+/** Pull likely price strings from HTML: currency symbols, JSON price fields, meta tags. */
+function extractPriceCandidates(html: string): string[] {
+  const found = new Map<string, number>();
+  const bump = (v: string) => found.set(v, (found.get(v) || 0) + 1);
+  // currency symbol/code + amount (both orders)
+  for (const m of html.matchAll(/(?:USD|EUR|GBP|ILS|NIS|₪|\$|£|€)\s?\d{1,5}(?:[.,]\d{2})?|\d{1,5}(?:[.,]\d{2})?\s?(?:USD|EUR|GBP|ILS|NIS|₪|\$|£|€)/gi)) bump(m[0].replace(/\s+/g, ''));
+  // JSON price fields + itemprop/meta price
+  for (const m of html.matchAll(/"(?:price|amount|current_?price|sale_?price)"\s*:\s*"?(\d{1,6}(?:\.\d{2})?)"?/gi)) bump(m[1]);
+  for (const m of html.matchAll(/itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/gi)) bump(m[1]);
+  for (const m of html.matchAll(/<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([\d.,]+)["']/gi)) bump(m[1]);
+  return [...found.entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v).slice(0, 6);
+}
+
 function pageTextFrom(html: string): { title: string; text: string } {
   const title =
     html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
@@ -154,12 +167,14 @@ export async function extractMedia(
   }
 
   const { title, text } = pageTextFrom(html);
+  const prices = extractPriceCandidates(html);
+  const pageText = (prices.length ? `PRICE CANDIDATES: ${prices.join(', ')}\n` : '') + text;
   // Return a POOL of candidates (bigger than maxImages) so the selection step can
   // rank by real resolution + AI quality and drop junk/dupes before processing.
   const poolSize = Math.min(28, Math.max(s.maxImages * 3, 14));
   const imageUrls = ordered.map((b) => found.get(b)!).slice(0, poolSize);
-  log(`candidates: ${found.size}, pool: ${imageUrls.length}`);
-  return { imageUrls, pageTitle: title, pageText: text, usedFirecrawl, warnings };
+  log(`candidates: ${found.size}, pool: ${imageUrls.length}${prices.length ? `, prices: ${prices.slice(0, 3).join('/')}` : ''}`);
+  return { imageUrls, pageTitle: title, pageText, usedFirecrawl, warnings };
 }
 
 // ── Product-link discovery (for listing/category/bestsellers pages) ─────────

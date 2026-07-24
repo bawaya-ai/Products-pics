@@ -30,15 +30,12 @@ You receive a product page's title/text and a SHORTLIST of candidate image thumb
  "price_ils":  number|null,                            // price in ILS only if clearly in the text, else null — NEVER guess
  "images":     [{"index":0,"role":"main|angle|detail|skip"}]  // judge EVERY thumbnail by index
 }
-Image curation rules — be selective, quality over quantity:
-- "main" = exactly ONE: the single clearest, best-lit, full-product hero shot. STRONGLY PREFER a
-  clean product-ONLY photo on a plain/white/neutral background (no hands, no human body, no model,
-  no lifestyle scene). Only fall back to a lifestyle/in-hand shot for main if there is NO clean
-  product-only image at all.
-- "angle"/"detail" = additional CLEAN product shots of the SAME product from other views. Lifestyle/
-  in-hand/model shots go here at best (or "skip") — never as main when a clean product shot exists.
-- "skip" = anything low quality: blurry, watermarked, a collage/multi-product grid, a different product, lifestyle/model-only with no clear product, text/banner/logo, or a near-duplicate of one you already kept.
-- If several thumbnails show DIFFERENT products (e.g. a search page), keep only the ONE product that best matches the page title; skip the rest.
+Image curation rules — KEEP a rich set (aim for AT LEAST 3 good images when the page has them):
+- "main" = exactly ONE: the clearest full-product hero. PREFER a clean product-ONLY photo on a plain/white/neutral background (no hands/model). If none exists, use the best available.
+- "angle"/"detail" = KEEP every other distinct usable view of the SAME product — other angles, close-ups, packaging, AND in-context/lifestyle shots. Do NOT drop a usable image just because it's lifestyle/in-hand; keep it as angle/detail. Keep up to 6.
+- "skip" = ONLY true junk: blurry, watermarked, a collage/multi-product grid, a clearly DIFFERENT product, a size chart / pure text / logo / banner, or a near-duplicate of one you already kept.
+- If thumbnails show DIFFERENT products (e.g. a search page), keep only the ONE product matching the page title (its main + its own extra views); skip the others.
+For price_ils: use PRICE CANDIDATES / any visible price in the text — return the number you see (the user confirms currency). Still never invent a price that isn't shown.
 Professional, tasteful language only. If the page text is unrelated, derive the name from the kept images.`;
 
 export async function enrich(
