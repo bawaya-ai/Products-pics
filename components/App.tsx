@@ -127,6 +127,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [destStore, setDestStore] = useState<string>('');
   const [storeForm, setStoreForm] = useState<StoreForm>({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false });
   const [savingStore, setSavingStore] = useState(false);
+  const [testingStore, setTestingStore] = useState(false);
+  const [storeTest, setStoreTest] = useState<{ ok: boolean; detail: string } | null>(null);
   const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string; balance?: string }>>({});
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -228,6 +230,14 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     setSavingStore(false);
   }
   const editStore = (st: StoreRow) => setStoreForm({ id: st.id, name: st.name, base_url: st.base_url, token: '', category_default: st.category_default, is_default: st.is_default });
+  async function testStore(payload: { id?: number; base_url?: string; token?: string }) {
+    setTestingStore(true); setStoreTest(null);
+    try {
+      const r = await fetch('/api/stores/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      setStoreTest(await r.json().catch(() => ({ ok: false, detail: 'خطأ بالرد' })));
+    } catch (e: any) { setStoreTest({ ok: false, detail: String(e?.message) }); }
+    setTestingStore(false);
+  }
   async function makeDefaultStore(st: StoreRow) {
     const r = await fetch('/api/stores', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ store: { id: st.id, name: st.name, base_url: st.base_url, category_default: st.category_default, is_default: true } }) }).catch(() => null);
     if (!r || !r.ok) { setTestRows({ _err: { status: 'fail', detail: r ? `HTTP ${r.status}` : 'تعذّر الاتصال' } }); return; }
@@ -769,6 +779,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                       <span className={`chip ${st.has_token ? 'server' : 'none'}`}>{st.has_token ? '🔑 توكن محفوظ' : '— بدون توكن'}</span>
                     </div>
                     <div className="storeacts">
+                      <button className="btn-ghost" onClick={() => testStore({ id: st.id })} title="فحص التوافق">🔌</button>
                       {!st.is_default && <button className="btn-ghost" onClick={() => makeDefaultStore(st)} title="اجعله الافتراضي">⭐</button>}
                       <button className="btn-ghost" onClick={() => editStore(st)} title="تعديل">✏️</button>
                       <button className="btn-ghost" onClick={() => removeStore(st)} title="حذف">🗑</button>
@@ -789,9 +800,11 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                 <label className="f" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
                   <input type="checkbox" checked={storeForm.is_default} onChange={(e) => setStoreForm((f) => ({ ...f, is_default: e.target.checked }))} /> الوجهة الافتراضية
                 </label>
+                <button className="btn-ghost" onClick={() => testStore(storeForm.id ? { id: storeForm.id, token: storeForm.token || undefined } : { base_url: storeForm.base_url, token: storeForm.token })} disabled={testingStore || !storeForm.base_url.trim()} style={{ padding: '8px 14px' }}>{testingStore ? '… يفحص' : '🔌 فحص التوافق'}</button>
                 <button className="btn-gold" onClick={saveStore} disabled={savingStore || !storeForm.name.trim() || !storeForm.base_url.trim()} style={{ padding: '8px 16px' }}>{savingStore ? '… يحفظ' : storeForm.id ? '💾 حدّث المتجر' : '➕ أضف المتجر'}</button>
-                {storeForm.id && <button className="btn-ghost" onClick={() => setStoreForm({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false })} style={{ padding: '8px 14px' }}>إلغاء</button>}
+                {storeForm.id && <button className="btn-ghost" onClick={() => { setStoreForm({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false }); setStoreTest(null); }} style={{ padding: '8px 14px' }}>إلغاء</button>}
               </div>
+              {storeTest && <div className={storeTest.ok ? 'result-ok' : 'result-err'}>{storeTest.ok ? '✓ ' : '✗ '}{storeTest.detail}</div>}
               {cfg && !cfg.dbConfigured && <div className="hint">⚠ يلزم تخزين السيرفر (DATABASE_URL) لإدارة متاجر متعددة.</div>}
             </div>
           </div>
