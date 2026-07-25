@@ -5,6 +5,7 @@
 import sharp from 'sharp';
 import type { Settings } from './settings';
 import { removeBackground } from './bgremove';
+import { removeWatermark } from './watermark';
 
 export interface ProcessOutput {
   buf: Buffer;
@@ -33,6 +34,10 @@ export async function processImage(
   log: (m: string) => void,
 ): Promise<ProcessOutput> {
   const warnings: string[] = [];
+
+  // 0) optional watermark/logo removal (inpaint) BEFORE cutout, so the model sees full context
+  const dewm = await removeWatermark(input, s, log).catch(() => null);
+  if (dewm) { input = dewm; contentType = 'image/png'; warnings.push('watermark_removed'); }
 
   // 1) background removal via the provider chain
   const cut = await removeBackground(input, contentType, s, log);

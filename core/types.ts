@@ -34,6 +34,8 @@ export interface Manifest {
   tags: string[];
   category: string;
   images: ProcessedImage[];
+  /** product video found on the page (streamed from source; not re-encoded) */
+  video?: { url: string; poster?: string };
   warnings: string[];
   createdAt: string;
 }

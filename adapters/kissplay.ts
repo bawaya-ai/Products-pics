@@ -29,6 +29,7 @@ export async function saveToKissPlay(m: Manifest, s: Settings): Promise<SaveResu
     price_ils: m.price.amount ? Math.round(m.price.amount * 100) : 0, // agorot
     is_active: s.publish !== false,
     source_url: m.sourceUrl,
+    video_url: m.video?.url || undefined,
     images: kept.map((i, idx) => ({
       b64: i.dataUrl.split(',')[1],
       contentType: i.dataUrl.slice(5, i.dataUrl.indexOf(';')),

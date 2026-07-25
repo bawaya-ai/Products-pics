@@ -16,14 +16,14 @@ interface ClientSettings {
   bgMode: string; aiEnabled: boolean; anthropicModel: string;
   category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google';
   sharpen: number; brightness: number; contrast: number; padding: number;
-  bgColor: string; maxKB: number; dedup: boolean; convertCurrency: boolean;
+  bgColor: string; maxKB: number; dedup: boolean; convertCurrency: boolean; removeWatermark: boolean;
 }
 const DEFAULT_SETTINGS: ClientSettings = {
   size: 1024, quality: 88, formats: ['webp'], maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
-  dedup: true, convertCurrency: true,
+  dedup: true, convertCurrency: true, removeWatermark: false,
 };
 type SearchMode = 'product' | 'category' | 'domain';
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
@@ -559,6 +559,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   <select value={settings.dedup ? '1' : '0'} onChange={(e) => upd({ dedup: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي (يبقّي الكل)</option></select></div>
                 <div><label className="f">تحويل العملة → ₪</label>
                   <select value={settings.convertCurrency ? '1' : '0'} onChange={(e) => upd({ convertCurrency: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي</option></select></div>
+                <div style={{ gridColumn: 'span 2' }}><label className="f">🧽 إزالة العلامة المائية (تجريبي · كشف Claude + مسح OpenAI · للصورة الرئيسية · أبطأ)</label>
+                  <select value={settings.removeWatermark ? '1' : '0'} onChange={(e) => upd({ removeWatermark: e.target.value === '1' })}><option value="0">مطفي</option><option value="1">مفعّل — يكشف ويمسح الشعار/العلامة</option></select></div>
               </div>
             )}
             {(busy || progress > 0) && <div className="bar"><i style={{ width: `${progress}%` }} /></div>}
@@ -630,7 +632,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                           </>
                         )}
                       </div>
-                      <div className="hint" style={{ marginTop: 4, direction: 'ltr', textAlign: 'left' }}>{kept.length} صورة · {kept[0] ? kept[0].bgProvider : ''}</div>
+                      <div className="hint" style={{ marginTop: 4, direction: 'ltr', textAlign: 'left' }}>{kept.length} صورة · {kept[0] ? kept[0].bgProvider : ''}{p.manifest.video ? <> · <a href={p.manifest.video.url} target="_blank" rel="noreferrer">🎬 فيديو</a></> : ''}</div>
                     </div>
                   );
                 })}
@@ -657,6 +659,14 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   ))}
                 </div>
               </div>
+
+              {manifest.video && (
+                <div className="card">
+                  <strong>🎬 فيديو المنتج</strong>
+                  <video className="vidprev" controls preload="metadata" src={manifest.video.url} poster={manifest.images.find((i) => i.role === 'main')?.dataUrl} />
+                  <div className="hint" style={{ marginTop: 6 }}><a href={manifest.video.url} target="_blank" rel="noreferrer">⬇️ فتح/تنزيل الفيديو ↗</a> · يُعرض من المصدر مباشرة (ما بينحفظ محليًا)</div>
+                </div>
+              )}
 
               <div className="card">
                 <strong>✏️ بيانات المنتج</strong>

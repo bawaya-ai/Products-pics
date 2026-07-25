@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
         let pageTitle = '';
         let pageText = '';
         let srcWarnings: string[] = [];
+        let videoUrls: string[] = [];
 
         if (isUrl) {
           if (/\b(search_result|search_key|\/search|category|list\.html|goods_list)\b/i.test(url)) {
@@ -50,7 +51,8 @@ export async function POST(req: NextRequest) {
           }
           send({ type: 'stage', stage: 'extract', detail: 'استخراج الصور من الصفحة…' });
           const ex = await extractMedia(url, s, log);
-          candidateUrls = ex.imageUrls; pageTitle = ex.pageTitle; pageText = ex.pageText; srcWarnings = ex.warnings;
+          candidateUrls = ex.imageUrls; pageTitle = ex.pageTitle; pageText = ex.pageText; srcWarnings = ex.warnings; videoUrls = ex.videoUrls;
+          if (videoUrls.length) send({ type: 'warn', message: `🎬 لقيت فيديو للمنتج — رح يظهر بالمعاينة.` });
         } else {
           send({ type: 'stage', stage: 'search', detail: `بحث عن صور: "${url}"…` });
           send({ type: 'warn', message: '🔎 بحث ويب — الصور من مصادر عامة (حقوقها مجهولة). راجعها قبل الحفظ.' });
@@ -101,7 +103,9 @@ export async function POST(req: NextRequest) {
           const c = pool[index];
           send({ type: 'image', index: n, total: keepOrder.length, status: 'processing', detail: `${c.width}×${c.height}` });
           try {
-            const out = await processImage(c.buf, c.contentType, s, log);
+            // watermark removal (slow/costly) only on the MAIN image, never the whole set
+            const imgS = { ...s, removeWatermark: s.removeWatermark && role === 'main' };
+            const out = await processImage(c.buf, c.contentType, imgS, log);
             images.push({
               id: `im_${n}_${Math.random().toString(36).slice(2, 8)}`,
               sourceUrl: c.sourceUrl, role, order: n,
@@ -163,6 +167,7 @@ export async function POST(req: NextRequest) {
           price,
           tags: ai.tags, category: s.category || 'toys',
           images,
+          video: videoUrls[0] ? { url: videoUrls[0] } : undefined,
           warnings: [...ex.warnings, ...(ai.provider === 'none' && s.aiEnabled ? ['ai_enrichment_unavailable'] : []), ...(priceWarn ? [priceWarn] : []), 'price_requires_review'],
           createdAt: new Date().toISOString(),
         };

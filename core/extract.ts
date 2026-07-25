@@ -11,11 +11,14 @@ import type { Settings } from './settings';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const IMG_RE = /https?:\/\/[^\s"'\\<>()]+?\.(?:jpg|jpeg|png|webp|avif)(?:\?[^\s"'\\<>()]*)?/gi;
+// only progressive formats a bare <video src> can play natively (no HLS/QuickTime)
+const VID_RE = /https?:\/\/[^\s"'\\<>()]+?\.(?:mp4|webm)(?:\?[^\s"'\\<>()]*)?/gi;
 const JUNK =
   /(sprite|icon|logo|favicon|placeholder|avatar|flag|emoji|loading|blank|1x1|pixel|\/ui\/|\/static\/|badge|rating|star|captcha|qrcode|payment|visa|mastercard|paypal|\/wiki\/|[?&/]file:|\.html\b)/i;
 
 export interface Extraction {
   imageUrls: string[];
+  videoUrls: string[];
   pageTitle: string;
   pageText: string;   // trimmed visible-ish text for AI enrichment
   usedFirecrawl: boolean;
@@ -48,6 +51,15 @@ function harvest(html: string, add: (u: string) => void) {
   for (const m of html.matchAll(/<img[^>]+(?:src|data-src|data-lazy|data-original)=["']([^"']+)["']/gi)) add(m[1]);
   for (const m of html.matchAll(/srcset=["']([^"']+)["']/gi)) for (const part of m[1].split(',')) add(part.trim().split(/\s+/)[0]);
   for (const m of html.matchAll(IMG_RE)) add(m[0]);
+}
+
+// Product videos: og:video, <video>/<source>, JSON video fields, and raw .mp4/.webm/.m3u8 URLs.
+function harvestVideos(html: string, add: (u: string) => void) {
+  for (const m of html.matchAll(/<meta[^>]+(?:property|name)=["']og:video(?::secure_url|:url)?["'][^>]+content=["']([^"']+)["']/gi)) add(m[1]);
+  for (const m of html.matchAll(/<video[^>]+(?:src|data-src)=["']([^"']+\.(?:mp4|webm)[^"']*)["']/gi)) add(m[1]);
+  for (const m of html.matchAll(/<source[^>]+src=["']([^"']+\.(?:mp4|webm)[^"']*)["']/gi)) add(m[1]);
+  for (const m of html.matchAll(/["'](?:video_?url|videoUrl|hdVideoUrl|mp4Url|videoUrlHigh)["']\s*:\s*["']([^"']+\.(?:mp4|webm)[^"']*)["']/gi)) add(m[1]);
+  for (const m of html.matchAll(VID_RE)) add(m[0]);
 }
 
 /** Standalone image-URL harvester (used by web-search result pages). Resolves
@@ -132,6 +144,18 @@ export async function extractMedia(
     else if (u.length > prev.length) found.set(b, u);
   };
 
+  const videos = new Map<string, string>();
+  const vOrder: string[] = [];
+  const addV = (raw?: string) => {
+    if (!raw) return;
+    let u = decode(raw).trim();
+    if (u.startsWith('//')) u = 'https:' + u;
+    else if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, target.href).href; } catch { return; } }
+    if (!/^https?:\/\//i.test(u) || JUNK.test(u)) return; // skip ad/banner/sprite/logo clips
+    const b = u.split('?')[0];
+    if (!videos.has(b)) { videos.set(b, u); vOrder.push(b); }
+  };
+
   const target = assertPublicUrl(pageUrl);
 
   // 0) URL-param embedded images (Temu carries the main gallery image here)
@@ -153,14 +177,14 @@ export async function extractMedia(
   } catch (e: any) {
     warnings.push(`page fetch failed: ${e?.message}`);
   }
-  if (html) harvest(html, add);
+  if (html) { harvest(html, add); harvestVideos(html, addV); }
 
   // 4) Firecrawl rendered fetch when page is JS-heavy and a key exists
   let usedFirecrawl = false;
   if (found.size < 3 && s.firecrawlKey) {
     log('few images in raw HTML — trying Firecrawl rendered fetch…');
     const rendered = await firecrawlHtml(target.href, s.firecrawlKey);
-    if (rendered) { usedFirecrawl = true; harvest(rendered, add); if (!html) html = rendered; }
+    if (rendered) { usedFirecrawl = true; harvest(rendered, add); harvestVideos(rendered, addV); if (!html) html = rendered; }
     else warnings.push('firecrawl fetch failed');
   } else if (found.size < 2 && !s.firecrawlKey) {
     warnings.push('JS-rendered page and no FIRECRAWL key — only URL-param/OG images available');
@@ -173,8 +197,9 @@ export async function extractMedia(
   // rank by real resolution + AI quality and drop junk/dupes before processing.
   const poolSize = Math.min(28, Math.max(s.maxImages * 3, 14));
   const imageUrls = ordered.map((b) => found.get(b)!).slice(0, poolSize);
-  log(`candidates: ${found.size}, pool: ${imageUrls.length}${prices.length ? `, prices: ${prices.slice(0, 3).join('/')}` : ''}`);
-  return { imageUrls, pageTitle: title, pageText, usedFirecrawl, warnings };
+  const videoUrls = vOrder.map((b) => videos.get(b)!).slice(0, 3);
+  log(`candidates: ${found.size}, pool: ${imageUrls.length}${videoUrls.length ? `, videos: ${videoUrls.length}` : ''}${prices.length ? `, prices: ${prices.slice(0, 3).join('/')}` : ''}`);
+  return { imageUrls, videoUrls, pageTitle: title, pageText, usedFirecrawl, warnings };
 }
 
 // ── Product-link discovery (for listing/category/bestsellers pages) ─────────

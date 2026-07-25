@@ -19,6 +19,7 @@ export interface Settings {
   maxKB: number;         // byte cap per image
   dedup: boolean;        // drop near-duplicate images (toggle off to keep all)
   convertCurrency: boolean; // convert detected price → ILS
+  removeWatermark: boolean; // experimental: detect + inpaint an overlaid watermark/logo
 }
 
 const DEFAULTS: Settings = {
@@ -26,7 +27,7 @@ const DEFAULTS: Settings = {
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
-  dedup: true, convertCurrency: true,
+  dedup: true, convertCurrency: true, removeWatermark: false,
 };
 
 // setting key → env var name
