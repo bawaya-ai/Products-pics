@@ -6,13 +6,14 @@
 // Mutations are gated by the app password; listing is open (base URLs aren't secret).
 
 import { NextRequest, NextResponse } from 'next/server';
-import { checkAppAuth } from '@/core/settings';
+import { requireRole, requireRoleFresh } from '@/core/auth';
 import { dbConfigured, listStores, upsertStore, deleteStore } from '@/core/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const g = requireRole(req); if ('error' in g) return g.error;
   if (!dbConfigured()) return NextResponse.json({ stores: [], dbConfigured: false });
   try {
     return NextResponse.json({ stores: await listStores(), dbConfigured: true });
@@ -22,7 +23,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const g = await requireRoleFresh(req, 'admin'); if ('error' in g) return g.error;
   if (!dbConfigured()) return NextResponse.json({ error: 'DATABASE_URL not set — server storage unavailable' }, { status: 503 });
   const body = await req.json().catch(() => null);
   const s = body?.store || body;
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const g = await requireRoleFresh(req, 'admin'); if ('error' in g) return g.error;
   if (!dbConfigured()) return NextResponse.json({ error: 'DATABASE_URL not set' }, { status: 503 });
   const body = await req.json().catch(() => null);
   const id = Number(new URL(req.url).searchParams.get('id') || body?.id);

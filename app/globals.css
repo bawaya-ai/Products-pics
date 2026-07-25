@@ -86,6 +86,24 @@ a { color: var(--gold); }
 .storeacts .btn-ghost { padding: 5px 9px; font-size: 13px; }
 .storeform { border-top: 1px dashed var(--line); padding-top: 8px; }
 
+/* top bar (user + logout + admin/tool switch) */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.tb-left, .tb-right { display: flex; align-items: center; gap: 10px; }
+.tb-link { color: var(--gold); text-decoration: none; font-size: 14px; font-weight: 600; }
+.tb-link:hover { text-decoration: underline; }
+.tb-user { color: var(--muted); font-size: 12.5px; }
+.tb-user b { color: var(--fg, #eee); }
+
+/* auth pages (login / reset) */
+.authwrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.authcard { width: 100%; max-width: 380px; background: var(--card, #16161a); border: 1px solid var(--line); border-radius: 16px; padding: 26px 24px; }
+.authcard h1 { margin: 0 0 4px; font-size: 24px; }
+.authcard h1 em { color: var(--gold); font-style: normal; }
+.authcard .f { margin-top: 12px; }
+.authcard input { width: 100%; }
+.linkbtn { background: none; border: none; color: var(--muted); font-size: 13px; cursor: pointer; margin-top: 12px; width: 100%; text-align: center; padding: 4px; }
+.linkbtn:hover { color: var(--gold); }
+
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .pcard { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
 .pthumbs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }

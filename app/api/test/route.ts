@@ -3,7 +3,8 @@
 // per-provider status: ok | fail | skip (not configured). No values echoed.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveSettings, checkAppAuth } from '@/core/settings';
+import { resolveSettings } from '@/core/settings';
+import { requireRoleFresh } from '@/core/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,7 +20,7 @@ const fail = (provider: string, label: string, detail: string): Row => ({ provid
 const skip = (provider: string, label: string): Row => ({ provider, label, status: 'skip', detail: 'غير مضبوط' });
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const g = await requireRoleFresh(req, 'admin'); if ('error' in g) return g.error;
   const body = await req.json().catch(() => null);
   const s = await resolveSettings(body?.settings);
   const rows: Row[] = [];

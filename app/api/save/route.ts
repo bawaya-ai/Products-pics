@@ -1,7 +1,8 @@
 // ── POST /api/save — push a reviewed manifest through an adapter ───────────
 
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveSettings, checkAppAuth } from '@/core/settings';
+import { resolveSettings } from '@/core/settings';
+import { requireRole } from '@/core/auth';
 import { dbConfigured, getStoreResolved, getDefaultStoreResolved } from '@/core/db';
 import { saveToKissPlay } from '@/adapters/kissplay';
 import type { Manifest } from '@/core/types';
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const g = requireRole(req); if ('error' in g) return g.error;
 
   const body = await req.json().catch(() => null);
   const manifest: Manifest | undefined = body?.manifest;

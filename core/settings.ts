@@ -22,8 +22,10 @@ const ENV_MAP: Record<string, string> = {
   googleCseCx: 'GOOGLE_CSE_CX', storeBase: 'STORE_BASE', storeToken: 'STORE_IMPORT_TOKEN',
 };
 const KEY_FIELDS = Object.keys(ENV_MAP);
-// which stored values are secrets (encrypted at rest); URLs/ids are not
-const NON_SECRET = new Set(['storeBase', 'googleCseCx']);
+// extra app_config keys that aren't provider KEY_FIELDS but are still admin-editable
+const EXTRA_CONFIG = new Set(['appPassword', 'resendKey', 'resendFrom']);
+// which stored values are secrets (encrypted at rest); URLs/ids/senders are not
+const NON_SECRET = new Set(['storeBase', 'googleCseCx', 'resendFrom']);
 
 /** Resolve keys: DB (UI-editable, wins) → env (legacy) → client. Prefs from client/defaults. */
 export async function resolveSettings(client: Partial<Settings> | undefined): Promise<Settings> {
@@ -63,7 +65,7 @@ export async function configStatus(): Promise<Record<string, { set: boolean; sou
 export async function saveConfigKeys(keys: Record<string, unknown>): Promise<string[]> {
   const saved: string[] = [];
   for (const [k, v] of Object.entries(keys)) {
-    if (!KEY_FIELDS.includes(k) && k !== 'appPassword') continue;
+    if (!KEY_FIELDS.includes(k) && !EXTRA_CONFIG.has(k)) continue;
     if (typeof v !== 'string') continue;
     await setConfig(k, v.trim(), !NON_SECRET.has(k)); // encrypt everything except URLs/ids
     saved.push(k);

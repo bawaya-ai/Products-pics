@@ -7,7 +7,12 @@ export const dbConfigured = () => Boolean(process.env.DATABASE_URL);
 
 // ── AES-256-GCM at-rest encryption (key derived from APP_SECRET) ──
 function keyBuf(): Buffer {
-  return createHash('sha256').update(process.env.APP_SECRET || 'dev-insecure-change-me').digest();
+  const s = process.env.APP_SECRET || '';
+  // Fail CLOSED in production — the same key encrypts every stored secret at rest.
+  if (process.env.NODE_ENV === 'production' && s.length < 16) {
+    throw new Error('APP_SECRET is required (min 16 chars) in production');
+  }
+  return createHash('sha256').update(s || 'dev-insecure-change-me').digest();
 }
 export function encrypt(plain: string): string {
   if (!plain) return '';
@@ -100,6 +105,59 @@ export async function upsertStore(i: { id?: number; name: string; base_url: stri
 }
 export async function deleteStore(id: number): Promise<void> {
   await sql`DELETE FROM stores WHERE id = ${id}`;
+}
+
+// ── users (auth + roles) ──
+export interface UserRow { id: number; email: string; role: string; must_change: boolean; created_at: string }
+export async function getUserByEmail(email: string): Promise<any | null> {
+  const r = (await sql`SELECT * FROM users WHERE lower(email) = lower(${email})`) as any[];
+  return r[0] || null;
+}
+export async function getUserById(id: number): Promise<any | null> {
+  const r = (await sql`SELECT * FROM users WHERE id = ${id}`) as any[];
+  return r[0] || null;
+}
+export async function listUsers(): Promise<UserRow[]> {
+  const r = (await sql`SELECT id, email, role, must_change, created_at FROM users ORDER BY id`) as any[];
+  return r.map((u) => ({ id: u.id, email: u.email, role: u.role, must_change: u.must_change, created_at: u.created_at }));
+}
+export async function countUsers(): Promise<number> {
+  const r = (await sql`SELECT count(*)::int AS c FROM users`) as any[];
+  return r[0]?.c ?? 0;
+}
+export async function createUser(email: string, passwordHash: string, role: string, mustChange = true): Promise<number> {
+  const r = (await sql`INSERT INTO users (email, password_hash, role, must_change)
+                       VALUES (lower(${email}), ${passwordHash}, ${role}, ${mustChange}) RETURNING id`) as any[];
+  return r[0].id;
+}
+export async function setUserPassword(id: number, passwordHash: string, mustChange = false): Promise<void> {
+  await sql`UPDATE users SET password_hash = ${passwordHash}, must_change = ${mustChange}, reset_token = NULL, reset_expires = NULL WHERE id = ${id}`;
+}
+export async function setUserRole(id: number, role: string): Promise<void> {
+  await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
+}
+export async function deleteUser(id: number): Promise<void> {
+  await sql`DELETE FROM users WHERE id = ${id}`;
+}
+// Atomic "keep ≥1 admin" guard: the admin-count check lives IN the mutating statement's
+// WHERE, so a concurrent check-then-act can't drain the last admin. Returns false if blocked.
+export async function deleteUserGuarded(id: number): Promise<boolean> {
+  const r = (await sql`DELETE FROM users WHERE id = ${id}
+    AND (role <> 'admin' OR (SELECT count(*) FROM users WHERE role = 'admin') > 1) RETURNING id`) as any[];
+  return r.length > 0;
+}
+export async function setUserRoleGuarded(id: number, role: string): Promise<boolean> {
+  if (role === 'admin') { await sql`UPDATE users SET role = 'admin' WHERE id = ${id}`; return true; }
+  const r = (await sql`UPDATE users SET role = ${role} WHERE id = ${id}
+    AND (role <> 'admin' OR (SELECT count(*) FROM users WHERE role = 'admin') > 1) RETURNING id`) as any[];
+  return r.length > 0;
+}
+export async function setResetToken(id: number, hash: string, expires: Date): Promise<void> {
+  await sql`UPDATE users SET reset_token = ${hash}, reset_expires = ${expires.toISOString()} WHERE id = ${id}`;
+}
+export async function getUserByValidResetHash(hash: string): Promise<any | null> {
+  const r = (await sql`SELECT * FROM users WHERE reset_token = ${hash} AND reset_expires > now()`) as any[];
+  return r[0] || null;
 }
 
 // ── health ──

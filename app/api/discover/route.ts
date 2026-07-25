@@ -5,7 +5,8 @@
 // Returns up to `limit` product URLs. Uses Firecrawl render for JS-heavy sites.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveSettings, checkAppAuth } from '@/core/settings';
+import { resolveSettings } from '@/core/settings';
+import { requireRole } from '@/core/auth';
 import { assertPublicUrl, collectProductLinks } from '@/core/extract';
 
 export const runtime = 'nodejs';
@@ -59,7 +60,7 @@ function findListingUrls(html: string, baseHref: string, host: string): string[]
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const g = requireRole(req); if ('error' in g) return g.error;
   const body = await req.json().catch(() => null);
   let input: string = (body?.url || '').trim();
   if (!input) return NextResponse.json({ error: 'a domain or listing URL is required' }, { status: 400 });

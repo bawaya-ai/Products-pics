@@ -3,7 +3,8 @@
 // → { type:'result', manifest }
 
 import { NextRequest } from 'next/server';
-import { resolveSettings, checkAppAuth } from '@/core/settings';
+import { resolveSettings } from '@/core/settings';
+import { requireRole } from '@/core/auth';
 import { extractMedia } from '@/core/extract';
 import { searchImages } from '@/core/websearch';
 import { selectPool, poolThumb } from '@/core/select';
@@ -18,7 +19,7 @@ export const maxDuration = 60;
 const TIME_BUDGET_MS = 46_000; // stop early; leave headroom for the fast bg-off fallback + flush under the 60s Vercel kill
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAppAuth(req))) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+  const g = requireRole(req); if ('error' in g) return g.error;
 
   const body = await req.json().catch(() => null);
   const input: string | undefined = body?.url;
