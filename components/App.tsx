@@ -99,6 +99,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
   const [savingKeys, setSavingKeys] = useState(false);
   const [keysMsg, setKeysMsg] = useState('');
+  const [editKeys, setEditKeys] = useState<Set<string>>(() => new Set());
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [storesErr, setStoresErr] = useState('');
   const [destStore, setDestStore] = useState<string>('');
@@ -163,7 +164,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     try {
       const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys }) });
       if (!r.ok) { const e = await r.json().catch(() => ({})); setTestRows({ _err: { status: 'fail', detail: e.error || `HTTP ${r.status}` } }); setSavingKeys(false); return; }
-      setKeyDraft({}); refreshCfg(); setSaved(true); setTimeout(() => setSaved(false), 2500);
+      setKeyDraft({}); setEditKeys(new Set()); refreshCfg(); setSaved(true); setTimeout(() => setSaved(false), 2500);
     } catch (e: any) { setTestRows({ _err: { status: 'fail', detail: String(e?.message) } }); }
     setSavingKeys(false);
   }
@@ -628,30 +629,47 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
             {cfg && !cfg.dbConfigured && <div className="result-err">⚠ تخزين السيرفر غير مفعّل (DATABASE_URL مفقود).</div>}
             {testRows._err && <div className="result-err">{testRows._err.detail}</div>}
             {KEY_GROUPS.map((g) => (
-              <div key={g.title} className="igroup">
-                <div className="igtitle">{g.title}</div>
+              <div key={g.title} className="kgroup">
+                <div className="kgtitle">{g.title}</div>
                 {g.rows.map((r) => {
                   const src = savedSource(r.id);
                   const hasDraft = r.fields.some((f: any) => ((keyDraft[f.k] || '').trim()));
                   const t = testRows[r.id]?.status;
                   const bal = testRows[r.id]?.balance;
-                  const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src !== 'none' ? 'server' : hasDraft ? 'browser' : 'none';
-                  const mark = t === 'ok' ? '✓ فعّال' : t === 'fail' ? '✗ فشل' : src === 'db' ? '☁ سيرفر' : src === 'env' ? '☁ بيئة' : hasDraft ? '✎ غير محفوظ' : '— ناقص';
+                  const detail = testRows[r.id]?.detail || '';
+                  const show = PROVIDER_IDS.includes(r.id);
+                  // status light: red on a failed check, else green when saved/active, amber when typed-not-saved, off when missing
+                  let led = 'off', stat = 'غير مضبوط', statCls = 'off';
+                  if (show && t === 'fail') { led = 'red'; stat = 'معطّل'; statCls = 'err'; }
+                  else if (show && t === 'ok') { led = 'green'; stat = 'فعّال'; statCls = 'ok'; }
+                  else if (src !== 'none') { led = 'green'; stat = 'فعّال'; statCls = 'ok'; }
+                  else if (hasDraft) { led = 'amber'; stat = 'غير محفوظ'; statCls = 'warn'; }
                   return (
-                    <div key={r.id} className="irow">
-                      <div className="ilabel">
-                        <span>{r.label}</span>
-                        {PROVIDER_IDS.includes(r.id) && <span className={`chip ${cls}`} title={testRows[r.id]?.detail || ''}>{mark}</span>}
-                        {bal ? <span className="chip bal" title="الرصيد المتبقّي">💳 {bal}</span> : null}
+                    <div key={r.id} className="krow">
+                      <div className="khead">
+                        <span className={`led ${led}`} />
+                        <span className="kname">{r.label}</span>
+                        {show && <span className={`kstat ${statCls}`} title={detail}>{stat}</span>}
+                        {bal ? <span className="kbal" title="الرصيد المتبقّي">💳 {bal}</span> : null}
                       </div>
-                      <div className="ifields">
-                        {r.fields.map((f: any) => (
-                          <input key={f.k} type={f.type === 'text' ? 'text' : 'password'} dir="ltr"
-                            placeholder={savedSource(r.id) !== 'none' && f.type !== 'text' ? '•••••••• محفوظ — اكتب للتغيير' : f.ph}
-                            value={keyDraft[f.k] ?? ''} onChange={(e) => setKeyDraft((d) => ({ ...d, [f.k]: e.target.value }))} />
-                        ))}
+                      <div className="kfields">
+                        {r.fields.map((f: any) => {
+                          const secret = f.type !== 'text';
+                          const savedHere = src !== 'none' && secret;
+                          const editing = editKeys.has(f.k) || !savedHere;
+                          if (!editing) return (
+                            <div key={f.k} className="kmasked">
+                              <span className="kdots">••••••••••••••••</span>
+                              <button type="button" className="kedit" onClick={() => setEditKeys((s) => new Set(s).add(f.k))}>✎ تغيير</button>
+                            </div>
+                          );
+                          return (
+                            <input key={f.k} className="kinput" type={secret ? 'password' : 'text'} dir="ltr" placeholder={f.ph}
+                              value={keyDraft[f.k] ?? ''} onChange={(e) => setKeyDraft((d) => ({ ...d, [f.k]: e.target.value }))} />
+                          );
+                        })}
                       </div>
-                      <div className="hint">{r.hint}</div>
+                      <div className="khint">{r.hint}</div>
                     </div>
                   );
                 })}
