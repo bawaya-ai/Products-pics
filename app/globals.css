@@ -12,12 +12,17 @@
   --err: #f87171;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { overflow-x: hidden; max-width: 100%; }
 body {
   background: radial-gradient(1200px 600px at 50% -100px, #3a1016, var(--bg));
   color: var(--text);
   font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
   min-height: 100vh;
+  -webkit-text-size-adjust: 100%;
 }
+/* nothing may exceed its container → no horizontal page scroll */
+img, video, canvas, svg { max-width: 100%; }
+button, input, select, textarea { max-width: 100%; }
 .wrap { max-width: 980px; margin: 0 auto; padding: 28px 16px 80px; }
 header.hero { text-align: center; margin-bottom: 26px; }
 .hero h1 { font-size: 26px; letter-spacing: 0.5px; }
@@ -81,7 +86,8 @@ a { color: var(--gold); }
 .storerow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.02); }
 .storemeta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .storemeta strong { font-size: 13px; }
-.storemeta .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.storemeta .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.storeacts { flex-wrap: wrap; }
 .storeacts { display: flex; gap: 4px; flex-shrink: 0; }
 .storeacts .btn-ghost { padding: 5px 9px; font-size: 13px; }
 .storeform { border-top: 1px dashed var(--line); padding-top: 8px; }
@@ -191,3 +197,50 @@ a { color: var(--gold); }
 @media (max-width: 640px) { .irow { grid-template-columns: 1fr; } .irow .hint { grid-column: 1; } }
 .langs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 @media (max-width: 720px) { .langs { grid-template-columns: 1fr; } }
+
+/* ── mobile / app-like (no horizontal scroll) ─────────────────────────── */
+@media (max-width: 600px) {
+  .wrap { padding: 14px 11px 72px; }
+  .card { padding: 14px; border-radius: 13px; margin-bottom: 13px; }
+  .hero { margin-bottom: 18px; }
+  .hero h1 { font-size: 22px; }
+  .hero p { font-size: 13px; }
+
+  /* 16px inputs stop iOS from auto-zooming on focus (that was the "wide" jump) */
+  input, select, textarea { font-size: 16px; }
+
+  /* comfy tap targets + full-width primary actions = app feel */
+  button { padding: 12px 16px; min-height: 44px; }
+  .grow { flex: 1 1 100%; }
+  .row > .btn-primary, .row > .btn-gold { flex: 1 1 100%; }
+
+  /* grids → fewer columns */
+  .grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pgrid { grid-template-columns: 1fr; }
+  .ioptions { grid-template-columns: 1fr 1fr; gap: 9px; }
+  .set-grid { grid-template-columns: 1fr; }
+
+  /* dense flex rows wrap cleanly */
+  .khead { flex-wrap: wrap; }
+  .kbal { margin-inline-start: 0; }
+  .kfields .kinput, .kmasked { min-width: 100%; }
+  .ifields input { flex: 1 1 100%; }
+  .costhead { flex-wrap: wrap; gap: 4px; }
+  .storerow { flex-wrap: wrap; }
+  .storeacts { margin-inline-start: auto; }
+
+  /* search controls fill the row */
+  .modetab { padding: 10px 4px; font-size: 12.5px; }
+  .srchctl { gap: 8px; }
+  .ctl { flex: 1 1 46%; }
+  .ctl input, .ctl select, .ctl input[type='text'] { width: 100%; }
+
+  /* topbar tidy + truncate a long email */
+  .topbar { gap: 8px; }
+  .tb-user { max-width: 44vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 380px) {
+  .grid { grid-template-columns: 1fr; }
+  .ioptions { grid-template-columns: 1fr; }
+  .modetab { font-size: 11.5px; letter-spacing: -0.2px; }
+}
