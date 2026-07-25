@@ -14,12 +14,14 @@ export type Me = { email: string; role: 'admin' | 'operator' };
 interface ClientSettings {
   size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
   bgMode: string; aiEnabled: boolean; anthropicModel: string;
-  category: string; publish: boolean;
+  category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google';
 }
 const DEFAULT_SETTINGS: ClientSettings = {
   size: 1024, quality: 88, format: 'webp', maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
+  searchProvider: 'auto',
 };
+type SearchMode = 'product' | 'category' | 'domain';
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
 interface StoreRow { id: number; name: string; base_url: string; category_default: string; is_default: boolean; has_token: boolean }
 interface StoreForm { id?: number; name: string; base_url: string; token: string; category_default: string; is_default: boolean }
@@ -87,8 +89,9 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [logLines, setLogLines] = useState<{ t: string; c?: string }[]>([]);
   const [progress, setProgress] = useState(0);
   const [manifest, setManifest] = useState<Manifest | null>(null);
-  const [crawl, setCrawl] = useState(false);
-  const [crawlLimit] = useState(10);
+  const [searchMode, setSearchMode] = useState<SearchMode>('product');
+  const [numProducts, setNumProducts] = useState(10);
+  const [siteScope, setSiteScope] = useState('');
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
@@ -268,28 +271,31 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
 
   async function run() {
     if (!url.trim() || busy) return;
-    if (crawl) return runCrawl();
+    if (searchMode === 'category') return runDiscoverCrawl({ query: url.trim(), site: siteScope.trim() || undefined, limit: numProducts });
+    if (searchMode === 'domain') return runDiscoverCrawl({ url: url.trim(), limit: numProducts });
+    // specific product: a URL → scrape it, a name → image-search → one product
     setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4); setRestored(false);
     pushLog('▶ بدأنا…');
     const m = await scrapeUrl(url.trim());
     if (m) { setManifest(m); pushLog('✓ جاهز للمعاينة', 'ok'); }
     setBusy(false);
   }
-  async function runCrawl() {
+  // Category (query→product pages) OR Domain (site→product links): discover URLs, scrape each.
+  async function runDiscoverCrawl(body: { query?: string; site?: string; url?: string; limit: number }) {
     setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2); setRestored(false);
-    pushLog('▶ زحف على القائمة — بكتشف روابط المنتجات…');
+    pushLog(body.query ? `▶ بحث فئة: "${body.query}"${body.site ? ` داخل ${body.site}` : ''}…` : '▶ زحف على المتجر — بكتشف روابط المنتجات…');
     try {
-      const dres = await fetch('/api/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url.trim(), settings, limit: crawlLimit }) });
+      const dres = await fetch('/api/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, settings }) });
       if (!dres.ok) { pushLog(`فشل الاكتشاف (HTTP ${dres.status})`, 'err'); setBusy(false); return; }
       const d = await dres.json();
       (d.warnings || []).forEach((w: string) => pushLog(`⚠ ${w}`, 'warn'));
-      const urls: string[] = (d.productUrls || []).slice(0, crawlLimit);
-      if (!urls.length) { pushLog('✗ ما لقيت روابط منتجات بالصفحة — جرّب رابط قائمة/تصنيف فيه منتجات.', 'err'); setBusy(false); return; }
+      const urls: string[] = (d.productUrls || []).slice(0, body.limit);
+      if (!urls.length) { pushLog(body.query ? '✗ ما لقيت منتجات بهالفئة — جرّب صياغة تانية أو حدّد موقع.' : '✗ ما لقيت روابط منتجات — جرّب رابط قائمة/تصنيف فيه منتجات.', 'err'); setBusy(false); return; }
       pushLog(`🔎 لقيت ${urls.length} منتج — عم أسحبهن…`, 'ok');
       const acc: CrawlItem[] = [];
       for (let i = 0; i < urls.length; i++) {
         pushLog(`— (${i + 1}/${urls.length}) ${urls[i].replace(/^https?:\/\/[^/]+/, '')}`);
-        const m = await scrapeUrl(urls[i], `[${i + 1}/${urls.length}]`, { ...settings, maxImages: Math.max(settings.maxImages || 8, 5) });
+        const m = await scrapeUrl(urls[i], `[${i + 1}/${urls.length}]`, { ...settings, maxImages: Math.max(settings.maxImages || 8, 3) });
         if (m && m.images.length) {
           acc.push({ manifest: m }); setProducts([...acc]);
           if (m.images.filter((i2) => i2.role !== 'skip').length < 3) pushLog(`  ⚠ منتج ${i + 1} طلع بأقل من 3 صور (المصدر ما فيه أكتر)`, 'warn');
@@ -425,19 +431,44 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
 
           {/* URL + run */}
           <div className="card">
-            <div className="row">
-              <input className="grow" type="text" dir="ltr" placeholder="رابط منتج  أو  اكتب اسم منتج للبحث بالصور 🔎"
+            <div className="modetabs">
+              {(([['product', '🎯 منتج محدّد'], ['category', '🧩 فئة/نوع'], ['domain', '🌐 زحف دومين']]) as [SearchMode, string][]).map(([m, label]) => (
+                <button key={m} className={`modetab ${searchMode === m ? 'active' : ''}`} onClick={() => setSearchMode(m)}>{label}</button>
+              ))}
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
+              <input className="grow" type="text" dir="ltr"
+                placeholder={searchMode === 'category' ? 'نوع/فئة — مثلاً: سماعات بلوتوث 🧩' : searchMode === 'domain' ? 'دومين أو رابط متجر — مثلاً: lelo.com 🌐' : 'رابط منتج  أو  اسم المنتج بالضبط 🎯'}
                 value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && run()} />
               <button className="btn-primary" onClick={run} disabled={busy || !url.trim()}>
-                {busy ? '… شغّال' : crawl && /^https?:\/\//i.test(url.trim()) ? '📑 اسحب كل المنتجات' : /^https?:\/\//i.test(url.trim()) ? '🚀 معالجة' : '🔎 بحث ومعالجة'}
+                {busy ? '… شغّال' : searchMode === 'category' ? '🧩 جيب المنتجات' : searchMode === 'domain' ? '📑 اسحب المتجر' : /^https?:\/\//i.test(url.trim()) ? '🚀 معالجة' : '🔎 بحث ومعالجة'}
               </button>
             </div>
-            <div className="row" style={{ marginTop: 8, justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', color: crawl ? 'var(--gold)' : 'var(--muted)' }}>
-                <input type="checkbox" checked={crawl} onChange={(e) => setCrawl(e.target.checked)} style={{ width: 'auto' }} />
-                🌐 زحف على دومين: اعطِ دومين أو رابط متجر → تلاقي {crawlLimit} منتجات وتسحب كل واحد لحاله
-              </label>
-              <button className="btn-ghost" onClick={() => setShowOpts((v) => !v)} style={{ padding: '5px 12px', fontSize: 13 }}>{showOpts ? '▲ خيارات الإخراج' : '⚙️ خيارات الإخراج'}</button>
+            <div className="srchctl">
+              {(searchMode === 'category' || searchMode === 'domain') && (
+                <label className="ctl">عدد المنتجات
+                  <input type="number" min={1} max={20} value={numProducts} onChange={(e) => setNumProducts(Math.min(20, Math.max(1, +e.target.value || 10)))} /></label>
+              )}
+              <label className="ctl">صور لكل منتج
+                <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: Math.min(12, Math.max(1, +e.target.value || 8)) })} /></label>
+              {searchMode === 'category' && (
+                <label className="ctl">حصر بموقع (اختياري)
+                  <input type="text" dir="ltr" placeholder="amazon.com" value={siteScope} onChange={(e) => setSiteScope(e.target.value)} style={{ width: 130 }} /></label>
+              )}
+              {searchMode === 'product' && (
+                <label className="ctl">مزوّد البحث
+                  <select value={settings.searchProvider} onChange={(e) => upd({ searchProvider: e.target.value as any })}>
+                    <option value="auto">تلقائي (موصى)</option>
+                    <option value="firecrawl">Firecrawl</option>
+                    <option value="google">Google (محجوب)</option>
+                  </select></label>
+              )}
+              <button className="btn-ghost" onClick={() => setShowOpts((v) => !v)} style={{ marginInlineStart: 'auto', padding: '5px 12px', fontSize: 13 }}>{showOpts ? '▲ إخراج' : '⚙️ إخراج'}</button>
+            </div>
+            <div className="hint" style={{ marginTop: 6 }}>
+              {searchMode === 'category' ? 'اكتب نوع المنتج → بلاقي عدّة منتجات مختلفة ويسحب كل واحد لحاله. حدّد موقع لو بدك من متجر معيّن.'
+                : searchMode === 'domain' ? 'اعطِ دومين متجر → بلاقي صفحات المنتجات لحاله ويسحب كل واحد (صور + وصف + سعر).'
+                : 'الصق رابط منتج، أو اكتب اسمه بالضبط للبحث بصوره. النتيجة منتج واحد.'}
             </div>
             {showOpts && (
               <div className="ioptions" style={{ marginTop: 8 }}>

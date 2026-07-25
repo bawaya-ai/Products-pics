@@ -86,6 +86,16 @@ a { color: var(--gold); }
 .storeacts .btn-ghost { padding: 5px 9px; font-size: 13px; }
 .storeform { border-top: 1px dashed var(--line); padding-top: 8px; }
 
+/* search mode tabs + controls (tool) */
+.modetabs { display: flex; gap: 6px; }
+.modetab { flex: 1; padding: 9px 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 10px; cursor: pointer; font-size: 13.5px; transition: all .12s; }
+.modetab:hover { border-color: var(--gold); }
+.modetab.active { border-color: var(--gold); color: var(--gold); background: rgba(200, 161, 90, 0.1); font-weight: 600; }
+.srchctl { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.ctl { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.ctl input, .ctl select { width: 95px; }
+.ctl input[type="text"] { width: 130px; }
+
 /* top bar (user + logout + admin/tool switch) */
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .tb-left, .tb-right { display: flex; align-items: center; gap: 10px; }

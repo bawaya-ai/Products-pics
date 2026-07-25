@@ -8,11 +8,13 @@ export interface Settings {
   aiEnabled: boolean; anthropicKey?: string; anthropicModel?: string; openaiKey?: string;
   firecrawlKey?: string; googleCseKey?: string; googleCseCx?: string;
   storeBase?: string; storeToken?: string; category?: string; publish?: boolean;
+  searchProvider?: 'auto' | 'firecrawl' | 'google';
 }
 
 const DEFAULTS: Settings = {
   size: 1024, quality: 88, format: 'webp', maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
+  searchProvider: 'auto',
 };
 
 // setting key → env var name

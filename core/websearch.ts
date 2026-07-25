@@ -11,7 +11,14 @@ import { collectImageUrls, fetchImage } from './extract';
 import sharp from 'sharp';
 
 export interface WebSearchResult { imageUrls: string[]; provider: string; warnings: string[] }
+export interface ProductSearchResult { urls: string[]; provider: string; warnings: string[] }
 
+// bare host from a domain/url (for `site:` scoping)
+function bareSite(input: string): string {
+  return input.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/^www\./i, '');
+}
+
+/** SPECIFIC-PRODUCT search: a query (product name) → best candidate image URLs. Honors searchProvider. */
 export async function searchImages(
   query: string,
   s: Settings,
@@ -19,9 +26,10 @@ export async function searchImages(
 ): Promise<WebSearchResult> {
   const warnings: string[] = [];
   const q = query.trim().slice(0, 200);
+  const provider = s.searchProvider || 'auto';
 
-  // 1) Google CSE image search (direct image URLs)
-  if (s.googleCseKey && s.googleCseCx) {
+  // 1) Google CSE image search (direct image URLs) — unless the user forced Firecrawl
+  if ((provider === 'auto' || provider === 'google') && s.googleCseKey && s.googleCseCx) {
     try {
       const urls = await googleImageSearch(q, s.googleCseKey, s.googleCseCx);
       if (urls.length) { log(`Google CSE: ${urls.length} image results`); return { imageUrls: urls, provider: 'google', warnings }; }
@@ -30,7 +38,7 @@ export async function searchImages(
   }
 
   // 2) Firecrawl search → scrape top result pages → harvest images
-  if (s.firecrawlKey) {
+  if ((provider === 'auto' || provider === 'firecrawl') && s.firecrawlKey) {
     try {
       const urls = await firecrawlSearchImages(q, s.firecrawlKey, log);
       if (urls.length) { log(`Firecrawl search: ${urls.length} images from result pages`); return { imageUrls: urls, provider: 'firecrawl', warnings }; }
@@ -38,8 +46,49 @@ export async function searchImages(
     } catch (e: any) { warnings.push(`firecrawl_search_failed: ${String(e?.message).slice(0, 80)}`); }
   }
 
-  warnings.push('no_search_provider — add a Google CSE key (key+cx) or a Firecrawl key in Settings');
+  warnings.push(provider === 'google'
+    ? 'google_cse_only_but_unavailable — Google CSE مش شغّال (محجوب)، غيّر المزوّد لـ Firecrawl'
+    : 'no_search_provider — أضف مفتاح Firecrawl (أو Google CSE) بالإعدادات');
   return { imageUrls: [], provider: 'none', warnings };
+}
+
+/** CATEGORY search: a type/category query → a list of distinct product-PAGE URLs (each scraped
+ *  separately by the caller). Optional `site` scopes the search to one shop. Firecrawl-only. */
+export async function searchProductPages(
+  query: string,
+  site: string | undefined,
+  limit: number,
+  s: Settings,
+  log: (m: string) => void,
+): Promise<ProductSearchResult> {
+  const warnings: string[] = [];
+  const cap = Math.min(Math.max(Number(limit) || 10, 1), 20);
+  let q = query.trim().slice(0, 200);
+  if (site && site.trim()) q = `${q} site:${bareSite(site)}`;
+  if (!s.firecrawlKey) { warnings.push('no_firecrawl_key — بحث الفئات يحتاج مفتاح Firecrawl'); return { urls: [], provider: 'none', warnings }; }
+  try {
+    const r = await fetch('https://api.firecrawl.dev/v1/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.firecrawlKey}` },
+      body: JSON.stringify({ query: q, limit: cap }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) { warnings.push(`firecrawl_search_${r.status}`); return { urls: [], provider: 'firecrawl', warnings }; }
+    const d = (await r.json()) as any;
+    const results: any[] = d.data || [];
+    const seen = new Set<string>();
+    const urls: string[] = [];
+    for (const x of results) {
+      const u: string = x?.url || x?.metadata?.sourceURL || '';
+      if (!/^https?:\/\//i.test(u)) continue;
+      const norm = u.split('#')[0];
+      if (seen.has(norm)) continue;
+      seen.add(norm); urls.push(u);
+      if (urls.length >= cap) break;
+    }
+    log(`Firecrawl: ${urls.length} product pages for "${query}"${site ? ` @${bareSite(site)}` : ''}`);
+    return { urls, provider: 'firecrawl', warnings };
+  } catch (e: any) { warnings.push(`firecrawl_search_failed: ${String(e?.message).slice(0, 80)}`); return { urls: [], provider: 'firecrawl', warnings }; }
 }
 
 async function googleImageSearch(q: string, key: string, cx: string): Promise<string[]> {

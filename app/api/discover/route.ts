@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveSettings } from '@/core/settings';
 import { requireRole } from '@/core/auth';
 import { assertPublicUrl, collectProductLinks } from '@/core/extract';
+import { searchProductPages } from '@/core/websearch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,23 +63,17 @@ function findListingUrls(html: string, baseHref: string, host: string): string[]
 export async function POST(req: NextRequest) {
   const g = requireRole(req); if ('error' in g) return g.error;
   const body = await req.json().catch(() => null);
-  let input: string = (body?.url || '').trim();
-  if (!input) return NextResponse.json({ error: 'a domain or listing URL is required' }, { status: 400 });
-  if (!/^https?:\/\//i.test(input)) input = 'https://' + input.replace(/^\/+/, '');
-
   const s = await resolveSettings(body?.settings);
   const limit = Math.min(Number(body?.limit) || 10, 20);
+
   const started = Date.now();
   const timeLeft = () => Date.now() - started < TIME_BUDGET_MS;
-
-  let target: URL;
-  try { target = assertPublicUrl(input); } catch (e: any) { return NextResponse.json({ error: String(e?.message) }, { status: 400 }); }
-  const host = target.host;
   const warnings: string[] = [];
   const products = new Set<string>();
   const add = (arr: string[]) => { for (const u of arr) { products.add(u); if (products.size >= limit) break; } };
 
-  const scan = async (url: string) => {
+  // Harvest individual product links from a page (listing → its products), with a render fallback.
+  const scan = async (url: string): Promise<string> => {
     let html = await getHtml(url, s.firecrawlKey);
     let found = html ? collectProductLinks(html, url, limit) : [];
     if (found.length < 3 && s.firecrawlKey && timeLeft()) {
@@ -88,6 +83,41 @@ export async function POST(req: NextRequest) {
     add(found.filter((u) => u.replace(/[?#].*$/, '').replace(/\/+$/, '') !== url.replace(/[?#].*$/, '').replace(/\/+$/, '')));
     return html;
   };
+
+  // ── CATEGORY mode: search the web for the type → decide per result: a page with MANY
+  //    product links is a listing (harvest its products); a page with few/none is a
+  //    product page itself (add the page). Decided on links FOUND, not the net set delta,
+  //    so a product page's "related items" strip doesn't drop the actual product. ──
+  const norm = (u: string) => u.replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const query = (body?.query || '').trim();
+  if (query) {
+    const res = await searchProductPages(query, body?.site ? String(body.site) : undefined, Math.min(limit + 2, 20), s, () => {});
+    warnings.push(...res.warnings);
+    for (const seed of res.urls) {
+      if (products.size >= limit || !timeLeft()) break;
+      let html = await getHtml(seed, s.firecrawlKey);
+      let links = html ? collectProductLinks(html, seed, limit) : [];
+      if (links.length < 3 && s.firecrawlKey && timeLeft()) {
+        const rendered = await firecrawlHtml(seed, s.firecrawlKey);
+        if (rendered) links = collectProductLinks(rendered, seed, limit);
+      }
+      links = links.filter((u) => norm(u) !== norm(seed));
+      if (links.length >= 4) add(links);    // a listing/category page → its products
+      else products.add(seed);               // a product page (or article) → the page itself
+    }
+    const clist = [...products].slice(0, limit);
+    if (!clist.length) warnings.push('ما لقيت منتجات بهالفئة — جرّب صياغة تانية أو حدّد موقع.');
+    return NextResponse.json({ productUrls: clist, count: clist.length, warnings });
+  }
+
+  // ── DOMAIN mode: a bare domain / listing URL → discover product links on the site. ──
+  let input: string = (body?.url || '').trim();
+  if (!input) return NextResponse.json({ error: 'a domain or listing URL is required' }, { status: 400 });
+  if (!/^https?:\/\//i.test(input)) input = 'https://' + input.replace(/^\/+/, '');
+
+  let target: URL;
+  try { target = assertPublicUrl(input); } catch (e: any) { return NextResponse.json({ error: String(e?.message) }, { status: 400 }); }
+  const host = target.host;
 
   // 1) scan the given page directly (works if it's already a listing)
   const homeHtml = await scan(target.href);
