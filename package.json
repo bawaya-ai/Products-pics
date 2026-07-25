@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "jszip": "^3.10.1",
     "next": "^15.3.0",
     "onnxruntime-node": "^1.21.0",
@@ -23,6 +24,9 @@
     "typescript": "^5.7.2"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["sharp", "onnxruntime-node"]
+    "onlyBuiltDependencies": [
+      "sharp",
+      "onnxruntime-node"
+    ]
   }
 }
