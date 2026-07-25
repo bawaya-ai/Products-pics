@@ -25,5 +25,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js)$).*)'],
+  // Exclude static assets AND the PWA files (manifest/sw) so they're publicly reachable
+  // (the browser fetches the manifest without the session cookie).
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js|webmanifest)$).*)'],
 };
