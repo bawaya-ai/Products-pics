@@ -24,6 +24,30 @@ const DEFAULT_SETTINGS: ClientSettings = {
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
 const CATEGORIES = ['toys', 'lingerie', 'couples', 'oils-care', 'gifts', 'offers'];
 const LS_KEY = 'scraper-pro-settings-v1';
+const RESULTS_KEY = 'results-v1';
+
+// ── IndexedDB kv — results can be several MB of base64 images (localStorage would
+//    overflow), so persist them here so a page refresh NEVER loses unsaved results.
+function idbOpen(): Promise<IDBDatabase> {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('scraper-pro', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbSet(k: string, v: any) {
+  const db = await idbOpen();
+  return new Promise<void>((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+}
+async function idbGet<T = any>(k: string): Promise<T | null> {
+  const db = await idbOpen();
+  return new Promise((res) => { const tx = db.transaction('kv', 'readonly'); const rq = tx.objectStore('kv').get(k); rq.onsuccess = () => res(rq.result ?? null); rq.onerror = () => res(null); });
+}
+async function idbDel(k: string) {
+  const db = await idbOpen();
+  return new Promise<void>((res) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = () => res(); tx.onerror = () => res(); });
+}
 
 export default function Home() {
   const [settings, setSettings] = useState<ClientSettings>(DEFAULT_SETTINGS);
@@ -42,6 +66,7 @@ export default function Home() {
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showInt, setShowInt] = useState(false);
+  const [restored, setRestored] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   function saveSettings() {
@@ -51,7 +76,22 @@ export default function Home() {
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
     fetch('/api/status').then((r) => r.json()).then((d) => setEnvStatus(d.env)).catch(() => {});
+    // restore unsaved results after a refresh (kept in IndexedDB)
+    idbGet<any>(RESULTS_KEY).then((r) => {
+      if (r && (r.manifest || (r.products && r.products.length))) {
+        if (r.manifest) setManifest(r.manifest);
+        if (r.products) setProducts(r.products);
+        setRestored(true);
+      }
+    }).catch(() => {});
   }, []);
+
+  // persist results so a refresh before saving never loses them
+  useEffect(() => {
+    if (manifest || products.length) idbSet(RESULTS_KEY, { manifest, products, ts: Date.now() }).catch(() => {});
+    else idbDel(RESULTS_KEY).catch(() => {});
+  }, [manifest, products]);
+  function clearResults() { setManifest(null); setProducts([]); setRestored(false); idbDel(RESULTS_KEY).catch(() => {}); }
 
   // provider registry for the status strip + test button
   const PROVIDERS: { id: string; label: string; filled: (s: ClientSettings) => boolean }[] = [
@@ -137,7 +177,7 @@ export default function Home() {
   async function run() {
     if (!url.trim() || busy) return;
     if (crawl) return runCrawl();
-    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4);
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4); setRestored(false);
     pushLog('▶ بدأنا…');
     const m = await scrapeUrl(url.trim());
     if (m) { setManifest(m); pushLog('✓ جاهز للمعاينة', 'ok'); }
@@ -146,7 +186,7 @@ export default function Home() {
 
   // Crawl a listing: discover product urls, then scrape each into a product list.
   async function runCrawl() {
-    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2);
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2); setRestored(false);
     pushLog('▶ زحف على القائمة — بكتشف روابط المنتجات…');
     try {
       const dres = await fetch('/api/discover', {
@@ -408,6 +448,13 @@ export default function Home() {
         </div>
         </>)}
       </div>
+
+      {restored && (manifest || products.length > 0) && (
+        <div className="card" style={{ borderColor: 'var(--gold)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span style={{ color: 'var(--gold)', fontSize: 14 }}>↩ استرجعنا نتائج جلستك السابقة (ما ضاعت بالرفرش). احفظها للمتجر أو نزّلها قبل ما تبلّش جديد.</span>
+          <button className="btn-ghost" onClick={clearResults} style={{ padding: '6px 14px' }}>🗑 امسح وابدأ جديد</button>
+        </div>
+      )}
 
       {/* Crawl results — one card per product */}
       {products.length > 0 && (
