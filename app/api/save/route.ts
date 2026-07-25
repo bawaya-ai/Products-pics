@@ -10,14 +10,14 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  if (!checkAppAuth(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => null);
   const manifest: Manifest | undefined = body?.manifest;
   const adapter: string = body?.adapter || 'kiss-play';
   if (!manifest?.images?.length) return NextResponse.json({ error: 'manifest with images required' }, { status: 400 });
 
-  const s = resolveSettings(body?.settings);
+  const s = await resolveSettings(body?.settings);
 
   if (adapter === 'kiss-play') {
     const r = await saveToKissPlay(manifest, s);

@@ -18,7 +18,7 @@ export const maxDuration = 60;
 const TIME_BUDGET_MS = 46_000; // stop early; leave headroom for the fast bg-off fallback + flush under the 60s Vercel kill
 
 export async function POST(req: NextRequest) {
-  if (!checkAppAuth(req)) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+  if (!(await checkAppAuth(req))) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
 
   const body = await req.json().catch(() => null);
   const input: string | undefined = body?.url;
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   }
   const url = input.trim();
   const isUrl = /^https?:\/\//i.test(url);
-  const s = resolveSettings(body?.settings);
+  const s = await resolveSettings(body?.settings);
 
   const enc = new TextEncoder();
   const started = Date.now();

@@ -61,21 +61,41 @@ export default function Home() {
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
-  const [envStatus, setEnvStatus] = useState<Record<string, boolean> | null>(null);
-  const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string }>>({});
+  const [cfg, setCfg] = useState<{ providers: Record<string, { set: boolean; source: string }>; dbConfigured: boolean; appPasswordRequired: boolean } | null>(null);
+  const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  const [savingKeys, setSavingKeys] = useState(false);
+  const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string; balance?: string }>>({});
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showInt, setShowInt] = useState(false);
   const [restored, setRestored] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  function saveSettings() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); setSaved(true); setTimeout(() => setSaved(false), 2500); } catch {}
+  const appPassHeader = (): Record<string, string> => (settings.appPassword ? { 'x-app-password': settings.appPassword } : {});
+  function refreshCfg() {
+    fetch('/api/config').then((r) => r.json()).then((d) => setCfg(d)).catch(() => {});
+  }
+  // Save prefs to the browser AND push any newly-typed keys to the server (encrypted at rest).
+  async function saveSettings() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch {}
+    const keys: Record<string, string> = {};
+    for (const [k, v] of Object.entries(keyDraft)) if (v && v.trim()) keys[k] = v.trim();
+    if (Object.keys(keys).length) {
+      setSavingKeys(true);
+      try {
+        const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json', ...appPassHeader() }, body: JSON.stringify({ keys }) });
+        if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط — ما قدرنا نحفظ على السيرفر' } }); setSavingKeys(false); return; }
+        if (!r.ok) { const e = await r.json().catch(() => ({})); setTestRows({ _err: { status: 'fail', detail: e.error || `HTTP ${r.status}` } }); setSavingKeys(false); return; }
+        setKeyDraft({}); refreshCfg();
+      } catch (e: any) { setTestRows({ _err: { status: 'fail', detail: String(e?.message) } }); setSavingKeys(false); return; }
+      setSavingKeys(false);
+    }
+    setSaved(true); setTimeout(() => setSaved(false), 2500);
   }
 
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
-    fetch('/api/status').then((r) => r.json()).then((d) => setEnvStatus(d.env)).catch(() => {});
+    refreshCfg();
     // restore unsaved results after a refresh (kept in IndexedDB)
     idbGet<any>(RESULTS_KEY).then((r) => {
       if (r && (r.manifest || (r.products && r.products.length))) {
@@ -103,12 +123,10 @@ export default function Home() {
     { id: 'openai', label: 'OpenAI', filled: (s) => !!s.openaiKey },
     { id: 'store', label: 'المتجر', filled: (s) => !!s.storeToken },
   ];
-  // saved source per provider: 'server' (env) | 'browser' (UI) | 'none'
-  const savedSource = (id: string): 'server' | 'browser' | 'none' => {
-    const envKey = id === 'store' ? 'storeToken' : id; // status reports the store token, not "store"
-    if (envStatus?.[envKey]) return 'server';
-    if (PROVIDERS.find((p) => p.id === id)?.filled(settings)) return 'browser';
-    return 'none';
+  // saved source per provider from the server config: 'db' (UI-editable) | 'env' (legacy) | 'none'
+  const savedSource = (id: string): 'db' | 'env' | 'none' => {
+    const st = cfg?.providers?.[id];
+    return st?.set ? (st.source as 'db' | 'env') : 'none';
   };
 
   async function testKeys() {
@@ -122,8 +140,8 @@ export default function Home() {
       });
       if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط' } }); setTesting(false); return; }
       const d = await r.json();
-      const map: Record<string, { status: string; detail: string }> = {};
-      for (const row of d.rows || []) map[row.provider] = { status: row.status, detail: row.detail };
+      const map: Record<string, { status: string; detail: string; balance?: string }> = {};
+      for (const row of d.rows || []) map[row.provider] = { status: row.status, detail: row.detail, balance: row.balance };
       setTestRows(map);
     } catch (e: any) { setTestRows({ _err: { status: 'fail', detail: String(e?.message) } }); }
     setTesting(false);
@@ -378,10 +396,11 @@ export default function Home() {
         </div>
         {showInt && (<>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
-          <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص الكل'}</button>
-          <button className="btn-gold" onClick={saveSettings} style={{ padding: '8px 18px' }}>💾 حفظ</button>
+          <button className="btn-ghost" onClick={testKeys} disabled={testing} style={{ padding: '8px 16px' }}>{testing ? '… يفحص' : '🔌 فحص + رصيد'}</button>
+          <button className="btn-gold" onClick={saveSettings} disabled={savingKeys} style={{ padding: '8px 18px' }}>{savingKeys ? '… يحفظ' : '💾 حفظ على السيرفر'}</button>
         </div>
-        {saved && <div className="result-ok">✓ انحفظت التكاملات بالمتصفح · المفاتيح الأساسية ☁ محفوظة على السيرفر ما بتضيع.</div>}
+        {saved && <div className="result-ok">✓ انحفظ · المفاتيح تُخزَّن مشفّرة على السيرفر (DB) وما بتضيع بين الأجهزة/الجلسات.</div>}
+        {cfg && !cfg.dbConfigured && <div className="result-err">⚠ تخزين السيرفر غير مفعّل (DATABASE_URL مفقود) — المفاتيح رح تبقى بالبيئة فقط.</div>}
         {(testRows._auth || testRows._err) && <div className="result-err">{testRows._auth?.detail || testRows._err?.detail}</div>}
 
         {[
@@ -405,22 +424,26 @@ export default function Home() {
             <div className="igtitle">{g.title}</div>
             {g.rows.map((r) => {
               const src = savedSource(r.id);
+              const hasDraft = r.fields.some((f: any) => ((keyDraft[f.k] || '').trim()));
               const t = testRows[r.id]?.status;
-              const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src === 'server' ? 'server' : src === 'browser' ? 'browser' : 'none';
-              const mark = t === 'ok' ? '✓ فعّال' : t === 'fail' ? '✗ فشل' : src === 'server' ? '☁ سيرفر' : src === 'browser' ? '💾 محفوظ' : '— ناقص';
+              const bal = testRows[r.id]?.balance;
+              const cls = t === 'ok' ? 'ok' : t === 'fail' ? 'err' : src !== 'none' ? 'server' : hasDraft ? 'browser' : 'none';
+              const mark = t === 'ok' ? '✓ فعّال' : t === 'fail' ? '✗ فشل'
+                : src === 'db' ? '☁ سيرفر' : src === 'env' ? '☁ بيئة' : hasDraft ? '✎ غير محفوظ' : '— ناقص';
               return (
                 <div key={r.id} className="irow">
-                  <div className="ilabel"><span>{r.label}</span><span className={`chip ${cls}`} title={testRows[r.id]?.detail || ''}>{mark}</span></div>
-                  {src === 'server' ? (
-                    <div className="iserver">☁ محفوظ على السيرفر — ما بتحتاج تكتبه.</div>
-                  ) : (
-                    <div className="ifields">
-                      {r.fields.map((f: any) => (
-                        <input key={f.k} type={f.type === 'text' ? 'text' : 'password'} dir="ltr" placeholder={f.ph}
-                          value={(settings as any)[f.k]} onChange={(e) => upd({ [f.k]: e.target.value } as any)} />
-                      ))}
-                    </div>
-                  )}
+                  <div className="ilabel">
+                    <span>{r.label}</span>
+                    <span className={`chip ${cls}`} title={testRows[r.id]?.detail || ''}>{mark}</span>
+                    {bal ? <span className="chip bal" title="الرصيد المتبقّي">💳 {bal}</span> : null}
+                  </div>
+                  <div className="ifields">
+                    {r.fields.map((f: any) => (
+                      <input key={f.k} type={f.type === 'text' ? 'text' : 'password'} dir="ltr"
+                        placeholder={src !== 'none' ? '•••••••• محفوظ — اكتب للتغيير' : f.ph}
+                        value={keyDraft[f.k] ?? ''} onChange={(e) => setKeyDraft((d) => ({ ...d, [f.k]: e.target.value }))} />
+                    ))}
+                  </div>
                   <div className="hint">{r.hint}</div>
                 </div>
               );

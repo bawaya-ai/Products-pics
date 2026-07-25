@@ -1,70 +1,77 @@
-// ── Settings: client-provided values merged with server env (env wins) ─────
+// ── Settings: client prefs + keys resolved from DB (editable) → env → client ──
+import { getAllConfig, setConfig, dbConfigured } from './db';
 
 export interface Settings {
-  // output
-  size: number;            // unified square size (px)
-  quality: number;         // webp/png quality
-  format: 'webp' | 'png';
-  maxImages: number;
-  // background removal
-  bgMode: 'auto' | 'off' | 'replicate' | 'removebg' | 'local' | 'imgly' | 'openai'; // 'imgly' = legacy alias of 'local'
-  replicateKey?: string;
-  replicateModel?: string; // e.g. "bria/remove-background" or "owner/model:versionhash"
-  removebgKey?: string;
-  allowOpenAIImages?: boolean;
-  // AI enrichment
-  aiEnabled: boolean;
-  anthropicKey?: string;
-  anthropicModel?: string;
-  openaiKey?: string;
-  // extraction
-  firecrawlKey?: string;
-  // web image search (by product name)
-  googleCseKey?: string;
-  googleCseCx?: string;
-  // target store (kiss-play adapter)
-  storeBase?: string;
-  storeToken?: string;
-  category?: string;
-  publish?: boolean;
+  size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
+  bgMode: 'auto' | 'off' | 'replicate' | 'removebg' | 'local' | 'imgly' | 'openai';
+  replicateKey?: string; replicateModel?: string; removebgKey?: string; allowOpenAIImages?: boolean;
+  aiEnabled: boolean; anthropicKey?: string; anthropicModel?: string; openaiKey?: string;
+  firecrawlKey?: string; googleCseKey?: string; googleCseCx?: string;
+  storeBase?: string; storeToken?: string; category?: string; publish?: boolean;
 }
 
 const DEFAULTS: Settings = {
-  size: 1024,
-  quality: 88,
-  format: 'webp',
-  maxImages: 8,
-  bgMode: 'auto',
-  aiEnabled: true,
-  anthropicModel: 'claude-opus-4-8',
-  category: 'toys',
-  publish: true,
+  size: 1024, quality: 88, format: 'webp', maxImages: 8,
+  bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
 };
 
-/** Merge order: defaults ← client settings ← server env (env always wins for keys). */
-export function resolveSettings(client: Partial<Settings> | undefined): Settings {
-  const e = process.env;
+// setting key → env var name
+const ENV_MAP: Record<string, string> = {
+  replicateKey: 'REPLICATE_API_TOKEN', removebgKey: 'REMOVEBG_API_KEY', anthropicKey: 'ANTHROPIC_API_KEY',
+  openaiKey: 'OPENAI_API_KEY', firecrawlKey: 'FIRECRAWL_API_KEY', googleCseKey: 'GOOGLE_CSE_KEY',
+  googleCseCx: 'GOOGLE_CSE_CX', storeBase: 'STORE_BASE', storeToken: 'STORE_IMPORT_TOKEN',
+};
+const KEY_FIELDS = Object.keys(ENV_MAP);
+// which stored values are secrets (encrypted at rest); URLs/ids are not
+const NON_SECRET = new Set(['storeBase', 'googleCseCx']);
+
+/** Resolve keys: DB (UI-editable, wins) → env (legacy) → client. Prefs from client/defaults. */
+export async function resolveSettings(client: Partial<Settings> | undefined): Promise<Settings> {
   const s: Settings = { ...DEFAULTS, ...(client || {}) };
   s.size = clamp(Number(s.size) || 1024, 256, 2048);
   s.quality = clamp(Number(s.quality) || 88, 40, 100);
   s.maxImages = clamp(Number(s.maxImages) || 8, 1, 12);
   if (s.format !== 'png') s.format = 'webp';
 
-  s.replicateKey = e.REPLICATE_API_TOKEN || s.replicateKey;
-  s.removebgKey = e.REMOVEBG_API_KEY || s.removebgKey;
-  s.anthropicKey = e.ANTHROPIC_API_KEY || s.anthropicKey;
-  s.openaiKey = e.OPENAI_API_KEY || s.openaiKey;
-  s.firecrawlKey = e.FIRECRAWL_API_KEY || s.firecrawlKey;
-  s.googleCseKey = e.GOOGLE_CSE_KEY || s.googleCseKey;
-  s.googleCseCx = e.GOOGLE_CSE_CX || s.googleCseCx;
-  s.storeBase = e.STORE_BASE || s.storeBase;
-  s.storeToken = e.STORE_IMPORT_TOKEN || s.storeToken;
+  const db = dbConfigured() ? await getAllConfig().catch(() => ({} as Record<string, string>)) : {};
+  for (const k of KEY_FIELDS) {
+    (s as any)[k] = db[k] || process.env[ENV_MAP[k]] || (s as any)[k] || undefined;
+  }
   return s;
 }
 
-/** Optional shared password for the whole app (set APP_PASSWORD env to enable). */
-export function checkAppAuth(req: Request): boolean {
-  const want = process.env.APP_PASSWORD;
+/** Per-provider config status for the UI (booleans + source; never values). */
+export async function configStatus(): Promise<Record<string, { set: boolean; source: 'db' | 'env' | 'none' }>> {
+  const db = dbConfigured() ? await getAllConfig().catch(() => ({} as Record<string, string>)) : {};
+  const providers: Record<string, string> = {
+    firecrawl: 'firecrawlKey', anthropic: 'anthropicKey', openai: 'openaiKey',
+    replicate: 'replicateKey', removebg: 'removebgKey', googleCse: 'googleCseKey', store: 'storeToken',
+  };
+  const out: Record<string, { set: boolean; source: 'db' | 'env' | 'none' }> = {};
+  for (const [id, key] of Object.entries(providers)) {
+    const inDb = Boolean(db[key]); const inEnv = Boolean(process.env[ENV_MAP[key]]);
+    out[id] = { set: inDb || inEnv, source: inDb ? 'db' : inEnv ? 'env' : 'none' };
+  }
+  return out;
+}
+
+/** Save editable keys to the DB (secrets encrypted). Empty string clears a key. */
+export async function saveConfigKeys(keys: Record<string, unknown>): Promise<string[]> {
+  const saved: string[] = [];
+  for (const [k, v] of Object.entries(keys)) {
+    if (!KEY_FIELDS.includes(k) && k !== 'appPassword') continue;
+    if (typeof v !== 'string') continue;
+    await setConfig(k, v.trim(), !NON_SECRET.has(k)); // encrypt everything except URLs/ids
+    saved.push(k);
+  }
+  return saved;
+}
+
+/** App password gate: DB value (editable) → env → open if unset. */
+export async function checkAppAuth(req: Request): Promise<boolean> {
+  let want = '';
+  if (dbConfigured()) { const db = await getAllConfig().catch(() => ({} as Record<string, string>)); want = db.appPassword || ''; }
+  want = want || process.env.APP_PASSWORD || '';
   if (!want) return true;
   return req.headers.get('x-app-password') === want;
 }

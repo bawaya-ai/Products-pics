@@ -76,6 +76,7 @@ a { color: var(--gold); }
 .chip.server { background: rgba(200, 161, 90, 0.16); color: var(--gold); border-color: rgba(200, 161, 90, 0.45); }
 .chip.browser { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; }
 .chip.none { color: var(--muted); opacity: 0.7; }
+.chip.bal { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; border-color: rgba(56, 189, 248, 0.38); margin-inline-start: 6px; }
 
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .pcard { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }

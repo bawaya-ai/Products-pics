@@ -59,13 +59,13 @@ function findListingUrls(html: string, baseHref: string, host: string): string[]
 }
 
 export async function POST(req: NextRequest) {
-  if (!checkAppAuth(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const body = await req.json().catch(() => null);
   let input: string = (body?.url || '').trim();
   if (!input) return NextResponse.json({ error: 'a domain or listing URL is required' }, { status: 400 });
   if (!/^https?:\/\//i.test(input)) input = 'https://' + input.replace(/^\/+/, '');
 
-  const s = resolveSettings(body?.settings);
+  const s = await resolveSettings(body?.settings);
   const limit = Math.min(Number(body?.limit) || 10, 20);
   const started = Date.now();
   const timeLeft = () => Date.now() - started < TIME_BUDGET_MS;

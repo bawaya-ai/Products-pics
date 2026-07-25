@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-type Row = { provider: string; label: string; status: 'ok' | 'fail' | 'skip'; detail: string };
+type Row = { provider: string; label: string; status: 'ok' | 'fail' | 'skip'; detail: string; balance?: string };
 
 async function withTimeout<T>(p: Promise<T>, ms = 12000): Promise<T> {
   return Promise.race([p, new Promise<T>((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
@@ -19,9 +19,9 @@ const fail = (provider: string, label: string, detail: string): Row => ({ provid
 const skip = (provider: string, label: string): Row => ({ provider, label, status: 'skip', detail: 'غير مضبوط' });
 
 export async function POST(req: NextRequest) {
-  if (!checkAppAuth(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!(await checkAppAuth(req))) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const body = await req.json().catch(() => null);
-  const s = resolveSettings(body?.settings);
+  const s = await resolveSettings(body?.settings);
   const rows: Row[] = [];
 
   // Anthropic — 1-token message
@@ -43,11 +43,17 @@ export async function POST(req: NextRequest) {
     } catch (e: any) { rows.push(fail('openai', 'OpenAI (بديل)', String(e?.message))); }
   } else rows.push(skip('openai', 'OpenAI (بديل)'));
 
-  // remove.bg — account endpoint
+  // remove.bg — account endpoint (also carries the credit balance)
   if (s.removebgKey) {
     try {
       const r = await withTimeout(fetch('https://api.remove.bg/v1.0/account', { headers: { 'X-Api-Key': s.removebgKey } }));
-      rows.push(r.ok ? ok('removebg', 'remove.bg (خلفية)') : fail('removebg', 'remove.bg (خلفية)', `HTTP ${r.status}`));
+      if (r.ok) {
+        const d = (await r.json().catch(() => null)) as any;
+        const total = d?.data?.attributes?.credits?.total;
+        const free = d?.data?.attributes?.api?.free_calls;
+        const bal = total != null ? `${total} كريدت` : free != null ? `${free} مجاني/شهر` : '';
+        rows.push({ ...ok('removebg', 'remove.bg (خلفية)'), balance: bal });
+      } else rows.push(fail('removebg', 'remove.bg (خلفية)', `HTTP ${r.status}`));
     } catch (e: any) { rows.push(fail('removebg', 'remove.bg (خلفية)', String(e?.message))); }
   } else rows.push(skip('removebg', 'remove.bg (خلفية)'));
 
@@ -59,14 +65,21 @@ export async function POST(req: NextRequest) {
     } catch (e: any) { rows.push(fail('replicate', 'Replicate (خلفية+)', String(e?.message))); }
   } else rows.push(skip('replicate', 'Replicate (خلفية+)'));
 
-  // Firecrawl — minimal search
+  // Firecrawl — minimal search + credit balance
   if (s.firecrawlKey) {
     try {
       const r = await withTimeout(fetch('https://api.firecrawl.dev/v1/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.firecrawlKey}` },
         body: JSON.stringify({ query: 'test', limit: 1 }),
       }));
-      rows.push(r.ok ? ok('firecrawl', 'Firecrawl (بحث/رندرة)') : fail('firecrawl', 'Firecrawl (بحث/رندرة)', `HTTP ${r.status}`));
+      if (r.ok) {
+        let bal = '';
+        try {
+          const cu = await withTimeout(fetch('https://api.firecrawl.dev/v1/team/credit-usage', { headers: { Authorization: `Bearer ${s.firecrawlKey}` } }), 8000);
+          if (cu.ok) { const d = (await cu.json().catch(() => null)) as any; const rem = d?.data?.remaining_credits ?? d?.data?.remainingCredits; if (rem != null) bal = `${rem} كريدت`; }
+        } catch { /* balance is best-effort */ }
+        rows.push({ ...ok('firecrawl', 'Firecrawl (بحث/رندرة)'), balance: bal });
+      } else rows.push(fail('firecrawl', 'Firecrawl (بحث/رندرة)', `HTTP ${r.status}`));
     } catch (e: any) { rows.push(fail('firecrawl', 'Firecrawl (بحث/رندرة)', String(e?.message))); }
   } else rows.push(skip('firecrawl', 'Firecrawl (بحث/رندرة)'));
 
