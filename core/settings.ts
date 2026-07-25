@@ -35,7 +35,11 @@ export async function resolveSettings(client: Partial<Settings> | undefined): Pr
 
   const db = dbConfigured() ? await getAllConfig().catch(() => ({} as Record<string, string>)) : {};
   for (const k of KEY_FIELDS) {
-    (s as any)[k] = db[k] || process.env[ENV_MAP[k]] || (s as any)[k] || undefined;
+    // The store destination (base + token) is resolved SERVER-SIDE ONLY (DB → env), never from the
+    // client body — otherwise a caller could pair an attacker-controlled storeBase with the server's
+    // real storeToken and have us POST the secret token to their URL (token exfiltration).
+    const serverOnly = k === 'storeBase' || k === 'storeToken';
+    (s as any)[k] = db[k] || process.env[ENV_MAP[k]] || (serverOnly ? undefined : (s as any)[k]) || undefined;
   }
   return s;
 }
@@ -67,13 +71,20 @@ export async function saveConfigKeys(keys: Record<string, unknown>): Promise<str
   return saved;
 }
 
-/** App password gate: DB value (editable) → env → open if unset. */
+/** App password gate: DB value (editable) → env → open only if genuinely unset.
+ *  Fails CLOSED on a DB read error: a transient Neon blip must not silently disable the gate. */
 export async function checkAppAuth(req: Request): Promise<boolean> {
-  let want = '';
-  if (dbConfigured()) { const db = await getAllConfig().catch(() => ({} as Record<string, string>)); want = db.appPassword || ''; }
-  want = want || process.env.APP_PASSWORD || '';
-  if (!want) return true;
-  return req.headers.get('x-app-password') === want;
+  const envPw = process.env.APP_PASSWORD || '';
+  let dbPw = ''; let dbFailed = false;
+  if (dbConfigured()) {
+    try { const db = await getAllConfig(); dbPw = db.appPassword || ''; }
+    catch { dbFailed = true; }
+  }
+  const want = dbPw || envPw;
+  if (want) return req.headers.get('x-app-password') === want;
+  // No password known. If the DB read failed we can't be sure one isn't configured → deny.
+  if (dbFailed) return false;
+  return true; // genuinely unset → open (documented default)
 }
 
 function clamp(n: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, n)); }

@@ -77,6 +77,14 @@ a { color: var(--gold); }
 .chip.browser { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; }
 .chip.none { color: var(--muted); opacity: 0.7; }
 .chip.bal { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; border-color: rgba(56, 189, 248, 0.38); margin-inline-start: 6px; }
+.storelist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.storerow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.storemeta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.storemeta strong { font-size: 13px; }
+.storemeta .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.storeacts { display: flex; gap: 4px; flex-shrink: 0; }
+.storeacts .btn-ghost { padding: 5px 9px; font-size: 13px; }
+.storeform { border-top: 1px dashed var(--line); padding-top: 8px; }
 
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .pcard { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }

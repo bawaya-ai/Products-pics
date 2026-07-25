@@ -22,6 +22,22 @@ const DEFAULT_SETTINGS: ClientSettings = {
   appPassword: '',
 };
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
+interface StoreRow { id: number; name: string; base_url: string; category_default: string; is_default: boolean; has_token: boolean }
+interface StoreForm { id?: number; name: string; base_url: string; token: string; category_default: string; is_default: boolean }
+type CfgState = { providers: Record<string, { set: boolean; source: string }>; dbConfigured: boolean; appPasswordRequired: boolean };
+
+// Destination <select> — hoisted to module scope so its element type is STABLE across Home
+// re-renders (a component defined inside Home would remount the <select> on every render,
+// dropping focus/open state mid-crawl).
+function DestPicker({ destStore, setDestStore, cfg, stores }: { destStore: string; setDestStore: (v: string) => void; cfg: CfgState | null; stores: StoreRow[] }) {
+  return (
+    <select value={destStore} onChange={(e) => setDestStore(e.target.value)} title="وين ينحفظ؟" style={{ maxWidth: 220 }}>
+      <option value="">🏪 الوجهة الافتراضية</option>
+      {cfg?.providers?.store?.set && <option value="env">المتجر الأساسي (إعدادات)</option>}
+      {stores.map((st) => <option key={st.id} value={String(st.id)}>{st.is_default ? '⭐ ' : ''}{st.name}{!st.has_token ? ' (بدون توكن)' : ''}</option>)}
+    </select>
+  );
+}
 const CATEGORIES = ['toys', 'lingerie', 'couples', 'oils-care', 'gifts', 'offers'];
 const LS_KEY = 'scraper-pro-settings-v1';
 const RESULTS_KEY = 'results-v1';
@@ -61,9 +77,14 @@ export default function Home() {
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
-  const [cfg, setCfg] = useState<{ providers: Record<string, { set: boolean; source: string }>; dbConfigured: boolean; appPasswordRequired: boolean } | null>(null);
+  const [cfg, setCfg] = useState<CfgState | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
   const [savingKeys, setSavingKeys] = useState(false);
+  const [stores, setStores] = useState<StoreRow[]>([]);
+  const [storesErr, setStoresErr] = useState('');
+  const [destStore, setDestStore] = useState<string>(''); // '' = default resolution · 'env' = legacy · String(id) = a DB store
+  const [storeForm, setStoreForm] = useState<StoreForm>({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false });
+  const [savingStore, setSavingStore] = useState(false);
   const [testRows, setTestRows] = useState<Record<string, { status: string; detail: string; balance?: string }>>({});
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -74,6 +95,43 @@ export default function Home() {
   const appPassHeader = (): Record<string, string> => (settings.appPassword ? { 'x-app-password': settings.appPassword } : {});
   function refreshCfg() {
     fetch('/api/config').then((r) => r.json()).then((d) => setCfg(d)).catch(() => {});
+  }
+  function refreshStores() {
+    fetch('/api/stores').then((r) => r.json()).then((d) => {
+      // An errored 200 ({stores:[], error}) means the DB read failed — do NOT wipe the list to
+      // "zero stores" (that looks like everything was deleted and invites duplicate re-adds).
+      if (d?.error) { setStoresErr('تعذّر تحميل الوجهات — خطأ بقاعدة البيانات. الوجهات المحفوظة لسا موجودة.'); return; }
+      setStoresErr(''); setStores(Array.isArray(d?.stores) ? d.stores : []);
+    }).catch(() => setStoresErr('تعذّر الاتصال بالسيرفر لتحميل الوجهات.'));
+  }
+
+  // ── store destinations (add / edit / default / delete) ──
+  async function saveStore() {
+    if (!storeForm.name.trim() || !storeForm.base_url.trim() || savingStore) return;
+    setSavingStore(true);
+    try {
+      const r = await fetch('/api/stores', { method: 'POST', headers: { 'Content-Type': 'application/json', ...appPassHeader() }, body: JSON.stringify({ store: storeForm }) });
+      if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط — ما قدرنا نحفظ المتجر' } }); setSavingStore(false); return; }
+      if (!r.ok) { const e = await r.json().catch(() => ({})); setTestRows({ _err: { status: 'fail', detail: e.error || `HTTP ${r.status}` } }); setSavingStore(false); return; }
+      setStoreForm({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false });
+      refreshStores();
+    } catch (e: any) { setTestRows({ _err: { status: 'fail', detail: String(e?.message) } }); }
+    setSavingStore(false);
+  }
+  const editStore = (st: StoreRow) => setStoreForm({ id: st.id, name: st.name, base_url: st.base_url, token: '', category_default: st.category_default, is_default: st.is_default });
+  async function makeDefaultStore(st: StoreRow) {
+    const r = await fetch('/api/stores', { method: 'POST', headers: { 'Content-Type': 'application/json', ...appPassHeader() }, body: JSON.stringify({ store: { id: st.id, name: st.name, base_url: st.base_url, category_default: st.category_default, is_default: true } }) }).catch(() => null);
+    if (!r) { setTestRows({ _err: { status: 'fail', detail: 'تعذّر الاتصال بالسيرفر' } }); return; }
+    if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط — ما قدرنا نغيّر الافتراضي' } }); return; }
+    if (!r.ok) { const e = await r.json().catch(() => ({})); setTestRows({ _err: { status: 'fail', detail: e.error || `HTTP ${r.status}` } }); return; }
+    refreshStores();
+  }
+  async function removeStore(st: StoreRow) {
+    if (!window.confirm(`حذف المتجر "${st.name}"؟`)) return;
+    const r = await fetch(`/api/stores?id=${st.id}`, { method: 'DELETE', headers: { ...appPassHeader() } });
+    if (r.status === 401) { setTestRows({ _auth: { status: 'fail', detail: 'كلمة سر الأداة غلط' } }); return; }
+    refreshStores();
+    if (destStore === String(st.id)) setDestStore('');
   }
   // Save prefs to the browser AND push any newly-typed keys to the server (encrypted at rest).
   async function saveSettings() {
@@ -96,6 +154,7 @@ export default function Home() {
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
     refreshCfg();
+    refreshStores();
     // restore unsaved results after a refresh (kept in IndexedDB)
     idbGet<any>(RESULTS_KEY).then((r) => {
       if (r && (r.manifest || (r.products && r.products.length))) {
@@ -239,11 +298,12 @@ export default function Home() {
     setManifest((m) => m && { ...m, [path]: { ...m[path], [lang]: v } });
 
   async function postSave(m: Manifest): Promise<{ ok: boolean; productId?: string; productUrl?: string; error?: string }> {
+    const storeId = destStore === '' ? undefined : destStore === 'env' ? 'env' : Number(destStore);
     try {
       const r = await fetch('/api/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(settings.appPassword ? { 'x-app-password': settings.appPassword } : {}) },
-        body: JSON.stringify({ manifest: m, adapter: 'kiss-play', settings }),
+        headers: { 'Content-Type': 'application/json', ...appPassHeader() },
+        body: JSON.stringify({ manifest: m, adapter: 'kiss-play', settings, storeId }),
       });
       return await r.json();
     } catch (e: any) { return { ok: false, error: e?.message }; }
@@ -451,6 +511,49 @@ export default function Home() {
           </div>
         ))}
 
+        {/* Multiple save destinations (stores) */}
+        <div className="igroup">
+          <div className="igtitle">🏬 وجهات الحفظ — متاجر متعددة</div>
+          {storesErr && <div className="result-err">⚠ {storesErr}</div>}
+          {stores.length > 0 && (
+            <div className="storelist">
+              {stores.map((st) => (
+                <div key={st.id} className="storerow">
+                  <div className="storemeta">
+                    <strong>{st.is_default ? '⭐ ' : ''}{st.name}</strong>
+                    <span className="hint" dir="ltr">{st.base_url}</span>
+                    <span className={`chip ${st.has_token ? 'server' : 'none'}`}>{st.has_token ? '🔑 توكن محفوظ' : '— بدون توكن'}</span>
+                  </div>
+                  <div className="storeacts">
+                    {!st.is_default && <button className="btn-ghost" onClick={() => makeDefaultStore(st)} title="اجعله الوجهة الافتراضية">⭐</button>}
+                    <button className="btn-ghost" onClick={() => editStore(st)} title="تعديل">✏️</button>
+                    <button className="btn-ghost" onClick={() => removeStore(st)} title="حذف">🗑</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="storeform">
+            <div className="igtitle" style={{ fontSize: 13, marginTop: 8 }}>{storeForm.id ? '✏️ تعديل متجر' : '➕ إضافة متجر جديد'}</div>
+            <div className="ifields">
+              <input type="text" placeholder="اسم المتجر (مثلاً: Kiss Play)" value={storeForm.name} onChange={(e) => setStoreForm((f) => ({ ...f, name: e.target.value }))} />
+              <input type="text" dir="ltr" placeholder="https://…workers.dev" value={storeForm.base_url} onChange={(e) => setStoreForm((f) => ({ ...f, base_url: e.target.value }))} />
+              <input type="password" dir="ltr" placeholder={storeForm.id ? '•••• التوكن محفوظ — اكتب للتغيير' : 'Import Token'} value={storeForm.token} onChange={(e) => setStoreForm((f) => ({ ...f, token: e.target.value }))} />
+            </div>
+            <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
+              <select value={storeForm.category_default} onChange={(e) => setStoreForm((f) => ({ ...f, category_default: e.target.value }))}>
+                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <label className="f" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                <input type="checkbox" checked={storeForm.is_default} onChange={(e) => setStoreForm((f) => ({ ...f, is_default: e.target.checked }))} /> الوجهة الافتراضية
+              </label>
+              <button className="btn-gold" onClick={saveStore} disabled={savingStore || !storeForm.name.trim() || !storeForm.base_url.trim()} style={{ padding: '8px 16px' }}>{savingStore ? '… يحفظ' : storeForm.id ? '💾 حدّث المتجر' : '➕ أضف المتجر'}</button>
+              {storeForm.id && <button className="btn-ghost" onClick={() => setStoreForm({ name: '', base_url: '', token: '', category_default: 'toys', is_default: false })} style={{ padding: '8px 14px' }}>إلغاء</button>}
+            </div>
+            {cfg && !cfg.dbConfigured && <div className="hint">⚠ يلزم تخزين السيرفر (DATABASE_URL) لإدارة متاجر متعددة.</div>}
+          </div>
+        </div>
+
         <div className="igroup">
           <div className="igtitle">🎛️ الإخراج والخيارات</div>
           <div className="ioptions">
@@ -486,6 +589,7 @@ export default function Home() {
             <strong>🧺 منتجات مسحوبة: {products.length} {busy ? '(عم يكمّل…)' : ''}</strong>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn-ghost" onClick={downloadAllProducts} disabled={products.every((p) => p.skipped)} style={{ padding: '9px 16px' }}>⬇️ تنزيل الكل (مجلدات)</button>
+              <DestPicker destStore={destStore} setDestStore={setDestStore} cfg={cfg} stores={stores} />
               <button className="btn-gold" onClick={saveAllProducts} disabled={busy || products.every((p) => p.saved || p.skipped)} style={{ padding: '9px 18px' }}>💾 حفظ الكل بالمتجر</button>
             </div>
           </div>
@@ -580,10 +684,11 @@ export default function Home() {
 
           <div className="card">
             <div className="row">
-              <select style={{ width: 240 }} value={adapter} onChange={(e) => setAdapter(e.target.value as any)}>
-                <option value="kiss-play">💾 حفظ لمتجر Kiss Play</option>
+              <select style={{ width: 200 }} value={adapter} onChange={(e) => setAdapter(e.target.value as any)}>
+                <option value="kiss-play">💾 حفظ لمتجر</option>
                 <option value="json">⬇️ تنزيل ZIP (لأي مشروع)</option>
               </select>
+              {adapter === 'kiss-play' && <DestPicker destStore={destStore} setDestStore={setDestStore} cfg={cfg} stores={stores} />}
               <button className="btn-gold" onClick={save} disabled={busy}>{busy ? '…' : adapter === 'json' ? '⬇️ تنزيل' : '💾 حفظ للمتجر'}</button>
             </div>
             {saveMsg && (
