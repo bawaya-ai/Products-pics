@@ -108,6 +108,7 @@ export async function POST(req: NextRequest) {
               dataUrl: `data:${out.contentType};base64,${out.buf.toString('base64')}`,
               width: out.width, height: out.height, bytes: out.bytes,
               hasAlpha: out.hasAlpha, bgProvider: out.bgProvider, warnings: out.warnings,
+              variants: out.variants.slice(1).map((v) => ({ format: v.format, dataUrl: `data:${v.contentType};base64,${v.buf.toString('base64')}`, bytes: v.bytes })),
             });
             send({ type: 'image', index: n, total: keepOrder.length, status: 'done', detail: `${out.width}×${out.height} · ${(out.bytes / 1024).toFixed(0)}KB · bg:${out.bgProvider}` });
           } catch (e: any) {
@@ -127,6 +128,7 @@ export async function POST(req: NextRequest) {
               dataUrl: `data:${out.contentType};base64,${out.buf.toString('base64')}`,
               width: out.width, height: out.height, bytes: out.bytes,
               hasAlpha: false, bgProvider: 'none', warnings: ['bg_skipped_time'],
+              variants: out.variants.slice(1).map((v) => ({ format: v.format, dataUrl: `data:${v.contentType};base64,${v.buf.toString('base64')}`, bytes: v.bytes })),
             });
             send({ type: 'warn', message: 'الوقت ضاق — رجّعت الصورة الرئيسية بدون إزالة خلفية. للخلفية النظيفة جرّب رابط منتج مباشر أو مفتاح Replicate.' });
           } catch { /* fall through to error */ }

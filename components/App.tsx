@@ -12,14 +12,14 @@ import type { Manifest, MediaRole, ProgressEvent } from '@/core/types';
 export type Me = { email: string; role: 'admin' | 'operator' };
 
 interface ClientSettings {
-  size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
+  size: number; quality: number; formats: string[]; maxImages: number;
   bgMode: string; aiEnabled: boolean; anthropicModel: string;
   category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google';
   sharpen: number; brightness: number; contrast: number; padding: number;
   bgColor: string; maxKB: number; dedup: boolean; convertCurrency: boolean;
 }
 const DEFAULT_SETTINGS: ClientSettings = {
-  size: 1024, quality: 88, format: 'webp', maxImages: 8,
+  size: 1024, quality: 88, formats: ['webp'], maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
@@ -113,6 +113,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [numProducts, setNumProducts] = useState(10);
   const [siteScope, setSiteScope] = useState('');
   const [ranSearch, setRanSearch] = useState(false); // last run used web search / crawl (→ Firecrawl cost)
+  const [customCats, setCustomCats] = useState<string[]>([]);
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
@@ -147,8 +148,20 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   }
   function refreshUsers() { fetch('/api/users').then((r) => (r.ok ? r.json() : { users: [] })).then((d) => setUsers(d.users || [])).catch(() => {}); }
 
+  // categories: the fixed set + any the user has typed (persisted, shared as suggestions)
+  const CATS_KEY = 'scraper-pro-cats-v1';
+  const allCats = [...new Set([...CATEGORIES, ...customCats])];
+  function noteCat(c: string) {
+    const v = (c || '').trim();
+    if (!v || allCats.includes(v)) return;
+    const next = [...customCats, v];
+    setCustomCats(next);
+    try { localStorage.setItem(CATS_KEY, JSON.stringify(next)); } catch {}
+  }
+
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
+    try { const rc = localStorage.getItem(CATS_KEY); if (rc) setCustomCats(JSON.parse(rc)); } catch {}
     refreshCfg(); refreshStores();
     if (mode === 'admin') refreshUsers();
     if (mode === 'tool') {
@@ -395,12 +408,13 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     const kept = m.images.filter((i) => i.role !== 'skip');
     let a = 0, d = 0;
     kept.forEach((img) => {
-      const ext = img.dataUrl.includes('image/png') ? 'png' : 'webp';
-      const name = img.role === 'main' ? `main.${ext}` : img.role === 'detail' ? `detail-${++d}.${ext}` : `angle-${++a}.${ext}`;
-      f.file(name, img.dataUrl.split(',')[1], { base64: true });
+      const base = img.role === 'main' ? 'main' : img.role === 'detail' ? `detail-${++d}` : `angle-${++a}`;
+      const primExt = img.dataUrl.includes('image/png') ? 'png' : img.dataUrl.includes('image/jpeg') ? 'jpg' : img.dataUrl.includes('image/avif') ? 'avif' : 'webp';
+      f.file(`${base}.${primExt}`, img.dataUrl.split(',')[1], { base64: true });
+      (img.variants || []).forEach((v) => f.file(`${base}.${v.format}`, v.dataUrl.split(',')[1], { base64: true }));
     });
     f.file('description.md', descriptionMd(m));
-    f.file('manifest.json', JSON.stringify({ ...m, images: kept.map(({ dataUrl, ...rest }) => rest) }, null, 2));
+    f.file('manifest.json', JSON.stringify({ ...m, images: kept.map(({ dataUrl, variants, ...rest }) => rest) }, null, 2));
   }
   async function downloadZip(m: Manifest) {
     const JSZip = (await import('jszip')).default;
@@ -445,6 +459,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   return (
     <div className="wrap">
       <TopBar me={me} mode={mode} />
+      <datalist id="catlist">{allCats.map((c) => <option key={c} value={c} />)}</datalist>
 
       {mode === 'tool' ? (
         <>
@@ -503,8 +518,15 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   </select></div>
                 <div><label className="f">حجم موحّد</label>
                   <select value={settings.size} onChange={(e) => upd({ size: +e.target.value })}>{[800, 1024, 1500].map((v) => <option key={v} value={v}>{v}×{v}</option>)}</select></div>
-                <div><label className="f">الصيغة</label>
-                  <select value={settings.format} onChange={(e) => upd({ format: e.target.value as any })}><option value="webp">WebP</option><option value="png">PNG</option></select></div>
+                <div style={{ gridColumn: 'span 2' }}><label className="f">الصيغ (واحد أو أكثر)</label>
+                  <div className="fmtpick">
+                    {['webp', 'png', 'jpg', 'avif'].map((f) => (
+                      <label key={f} className={`fmtchip ${settings.formats.includes(f) ? 'on' : ''}`}>
+                        <input type="checkbox" checked={settings.formats.includes(f)} onChange={(e) => { const set = new Set(settings.formats); if (e.target.checked) set.add(f); else set.delete(f); upd({ formats: set.size ? [...set] : ['webp'] }); }} />{f.toUpperCase()}
+                      </label>
+                    ))}
+                    <button type="button" className="fmtall" onClick={() => upd({ formats: ['webp', 'png', 'jpg', 'avif'] })}>الكل</button>
+                  </div></div>
                 <div><label className="f">أقصى صور</label>
                   <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: +e.target.value })} /></div>
                 <div><label className="f">ذكاء (اسم/وصف)</label>
@@ -585,9 +607,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                       <input type="text" value={p.manifest.name.ar} onChange={(e) => setPName(idx, e.target.value)} placeholder="اسم المنتج" style={{ marginTop: 6 }} />
                       <div className="row" style={{ marginTop: 6 }}>
                         <input type="number" value={p.manifest.price.amount ?? ''} onChange={(e) => setPPrice(idx, e.target.value)} placeholder="₪ سعر" style={{ width: 90 }} />
-                        <select value={p.manifest.category} onChange={(e) => setPCat(idx, e.target.value)} style={{ flex: 1 }}>
-                          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
+                        <input list="catlist" value={p.manifest.category} onChange={(e) => setPCat(idx, e.target.value)} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة (اكتب أو اختَر)" style={{ flex: 1 }} />
                       </div>
                       {p.manifest.price.original && <div className="pricenote">↩ محوّل من {p.manifest.price.original.amount} {p.manifest.price.original.currency}</div>}
                       <div className="row" style={{ marginTop: 7 }}>
@@ -645,10 +665,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                     <input type="number" min={0} style={{ width: 130 }} value={manifest.price.amount ?? ''} placeholder="0"
                       onChange={(e) => setManifest((m) => m && { ...m, price: { ...m.price, amount: e.target.value ? +e.target.value : null } })} />
                     {manifest.price.original && <span className="pricenote">↩ محوّل من {manifest.price.original.amount} {manifest.price.original.currency}</span>}</div>
-                  <div><label className="f">القسم</label>
-                    <select style={{ width: 150 }} value={manifest.category} onChange={(e) => setManifest((m) => m && { ...m, category: e.target.value })}>
-                      {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select></div>
+                  <div><label className="f">القسم (اكتب أو اختَر)</label>
+                    <input list="catlist" style={{ width: 160 }} value={manifest.category} onChange={(e) => setManifest((m) => m && { ...m, category: e.target.value })} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة" /></div>
                   <div><label className="f">نشر فوري؟</label>
                     <select style={{ width: 120 }} value={settings.publish ? '1' : '0'} onChange={(e) => upd({ publish: e.target.value === '1' })}>
                       <option value="1">نعم — فعّال</option><option value="0">مسودة</option>
@@ -767,9 +785,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                 <input type="password" dir="ltr" placeholder={storeForm.id ? '•••• التوكن محفوظ — اكتب للتغيير' : 'Import Token'} value={storeForm.token} onChange={(e) => setStoreForm((f) => ({ ...f, token: e.target.value }))} />
               </div>
               <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
-                <select value={storeForm.category_default} onChange={(e) => setStoreForm((f) => ({ ...f, category_default: e.target.value }))}>
-                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <input list="catlist" value={storeForm.category_default} onChange={(e) => setStoreForm((f) => ({ ...f, category_default: e.target.value }))} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة افتراضية (اكتب أو اختَر)" style={{ width: 190 }} />
                 <label className="f" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
                   <input type="checkbox" checked={storeForm.is_default} onChange={(e) => setStoreForm((f) => ({ ...f, is_default: e.target.checked }))} /> الوجهة الافتراضية
                 </label>

@@ -2,7 +2,7 @@
 import { getAllConfig, setConfig, dbConfigured } from './db';
 
 export interface Settings {
-  size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
+  size: number; quality: number; formats: string[]; maxImages: number;
   bgMode: 'auto' | 'off' | 'replicate' | 'removebg' | 'local' | 'imgly' | 'openai';
   replicateKey?: string; replicateModel?: string; removebgKey?: string; allowOpenAIImages?: boolean;
   aiEnabled: boolean; anthropicKey?: string; anthropicModel?: string; openaiKey?: string;
@@ -22,7 +22,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  size: 1024, quality: 88, format: 'webp', maxImages: 8,
+  size: 1024, quality: 88, formats: ['webp'], maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
@@ -48,7 +48,11 @@ export async function resolveSettings(client: Partial<Settings> | undefined): Pr
   s.size = clamp(Number(s.size) || 1024, 256, 2048);
   s.quality = clamp(Number(s.quality) || 88, 40, 100);
   s.maxImages = clamp(Number(s.maxImages) || 8, 1, 12);
-  if (s.format !== 'png') s.format = 'webp';
+  // one or more export formats; tolerate the old single `format` field + normalize jpeg→jpg
+  const raw = Array.isArray(s.formats) ? s.formats : (s as any).format ? [(s as any).format] : ['webp'];
+  const allow = ['webp', 'png', 'jpg', 'avif'];
+  s.formats = [...new Set(raw.map((f) => (f === 'jpeg' ? 'jpg' : String(f).toLowerCase())).filter((f) => allow.includes(f)))];
+  if (!s.formats.length) s.formats = ['webp'];
 
   const db = dbConfigured() ? await getAllConfig().catch(() => ({} as Record<string, string>)) : {};
   for (const k of KEY_FIELDS) {

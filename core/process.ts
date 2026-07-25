@@ -15,6 +15,7 @@ export interface ProcessOutput {
   hasAlpha: boolean;
   bgProvider: string;
   warnings: string[];
+  variants: { format: string; buf: Buffer; contentType: string; bytes: number }[];
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(n) ? n : lo));
@@ -74,31 +75,42 @@ export async function processImage(
   // in-pipeline flatten ahead of tone, which is what tinted the color before).
   if (!wantTransparent) tonedBuf = await sharp(tonedBuf).flatten({ background: solidBg }).toBuffer();
 
-  // 5) encode with byte cap (webp keeps alpha; png for max-compat transparency)
+  // 5) encode EACH requested format (byte-capped). The first is the primary output;
+  //    the rest ship as extra variants (for the ZIP export). Reuses the toned buffer.
   const cap = clamp(s.maxKB ?? 400, 50, 3000) * 1024;
-  let quality = s.quality;
-  let out: Buffer;
-  for (;;) {
-    const enc = sharp(tonedBuf);
-    out =
-      s.format === 'png'
-        ? await enc.png({ compressionLevel: 9, palette: quality < 80 }).toBuffer()
-        : await enc.webp({ quality, alphaQuality: 90, effort: 4 }).toBuffer();
-    if (out.byteLength <= cap || quality <= 45) break;
-    quality -= 12;
+  const fmts = s.formats && s.formats.length ? s.formats : ['webp'];
+  const variants: ProcessOutput['variants'] = [];
+  for (const fmt of fmts) {
+    // jpg has no alpha → flatten a transparent cutout onto white before encoding
+    const base = fmt === 'jpg' && wantTransparent ? await sharp(tonedBuf).flatten({ background: { r: 255, g: 255, b: 255 } }).toBuffer() : tonedBuf;
+    let quality = s.quality;
+    let out: Buffer;
+    for (;;) {
+      const enc = sharp(base);
+      out =
+        fmt === 'png' ? await enc.png({ compressionLevel: 9, palette: quality < 80 }).toBuffer()
+          : fmt === 'jpg' ? await enc.jpeg({ quality, mozjpeg: true }).toBuffer()
+            : fmt === 'avif' ? await enc.avif({ quality: Math.max(28, quality - 12), effort: 2 }).toBuffer()
+              : await enc.webp({ quality, alphaQuality: 90, effort: 4 }).toBuffer();
+      if (out.byteLength <= cap || quality <= 45) break;
+      quality -= 12;
+    }
+    if (out.byteLength > cap) warnings.push(`large_${fmt}_${Math.round(out.byteLength / 1024)}KB`);
+    variants.push({ format: fmt, buf: out, contentType: fmt === 'jpg' ? 'image/jpeg' : `image/${fmt}`, bytes: out.byteLength });
   }
-  if (out.byteLength > cap) warnings.push(`large_file_${Math.round(out.byteLength / 1024)}KB`);
 
-  const meta = await sharp(out).metadata();
+  const primary = variants[0];
+  const meta = await sharp(primary.buf).metadata();
   return {
-    buf: out,
-    contentType: s.format === 'png' ? 'image/png' : 'image/webp',
+    buf: primary.buf,
+    contentType: primary.contentType,
     width: meta.width ?? s.size,
     height: meta.height ?? s.size,
-    bytes: out.byteLength,
-    hasAlpha: Boolean(meta.hasAlpha) && wantTransparent,
+    bytes: primary.bytes,
+    hasAlpha: Boolean(meta.hasAlpha) && wantTransparent && primary.format !== 'jpg',
     bgProvider,
     warnings,
+    variants,
   };
 }
 

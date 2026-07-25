@@ -115,6 +115,14 @@ a { color: var(--gold); }
 .kedit:hover { background: rgba(200,161,90,.12); border-color: rgba(200,161,90,.3); }
 .khint { font-size: 11.5px; color: var(--muted); margin-top: 9px; opacity: .82; }
 
+/* multi-format picker */
+.fmtpick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fmtchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; color: var(--muted); }
+.fmtchip input { width: auto; margin: 0; }
+.fmtchip.on { border-color: var(--gold); color: var(--gold); background: rgba(200,161,90,0.1); }
+.fmtall { font-size: 12px; padding: 5px 10px; border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 8px; cursor: pointer; }
+.fmtall:hover { border-color: var(--gold); color: var(--gold); }
+
 /* price conversion note + cost meter */
 .pricenote { font-size: 11px; color: #7dd3fc; display: block; margin-top: 4px; }
 .costcard { background: linear-gradient(180deg, rgba(200,161,90,0.06), rgba(255,255,255,0.008)); }

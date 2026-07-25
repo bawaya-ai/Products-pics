@@ -16,6 +16,8 @@ export interface ProcessedImage {
   /** which background-removal provider produced it ('none' = passthrough) */
   bgProvider: string;
   warnings: string[];
+  /** additional export formats (beyond the primary dataUrl) for the ZIP download */
+  variants?: { format: string; dataUrl: string; bytes: number }[];
 }
 
 export interface LocalizedText { en: string; ar: string; he: string }
