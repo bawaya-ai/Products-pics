@@ -10,6 +10,7 @@ import { searchImages } from '@/core/websearch';
 import { selectPool, poolThumb } from '@/core/select';
 import { processImage } from '@/core/process';
 import { enrich } from '@/core/enrich';
+import { toILS, normalizeCurrency } from '@/core/currency';
 import type { Manifest, ProcessedImage, ProgressEvent } from '@/core/types';
 
 export const runtime = 'nodejs';
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
         if (pool.length === 0) { send({ type: 'error', message: 'ما في صور بدقّة كافية (كلها صغيرة/مكرّرة).' }); controller.close(); return; }
 
         // ── AI CURATE: pick the best shots (roles, drop junk) + write the copy, one call ──
-        let ai = { name: { en: '', ar: '', he: '' }, description: { en: '', ar: '', he: '' }, tags: [] as string[], price_ils: null as number | null, imageRoles: [] as { index: number; role: any }[], provider: 'none' };
+        let ai = { name: { en: '', ar: '', he: '' }, description: { en: '', ar: '', he: '' }, tags: [] as string[], price: { amount: null as number | null, currency: null as string | null }, imageRoles: [] as { index: number; role: any }[], provider: 'none' };
         let keepOrder = pool.map((_, i) => ({ index: i, role: (i === 0 ? 'main' : 'angle') as any }));
         if (s.aiEnabled) {
           send({ type: 'stage', stage: 'curate', detail: 'الذكاء يختار الأفضل ويكتب الوصف…' });
@@ -133,14 +134,34 @@ export async function POST(req: NextRequest) {
         if (images.length === 0) { send({ type: 'error', message: 'كل الصور فشلت بالمعالجة.' }); controller.close(); return; }
         if (!images.some((i) => i.role === 'main')) images[0].role = 'main';
 
+        // ── PRICE: convert the detected amount → ILS (unless disabled or already ILS) ──
+        let price: Manifest['price'] = { amount: ai.price.amount, currency: 'ILS', confidence: ai.price.amount ? 'low' : 'none' };
+        let priceWarn: string | null = null;
+        if (ai.price.amount && ai.price.currency) {
+          const norm = normalizeCurrency(ai.price.currency);
+          if (s.convertCurrency === false || norm === 'ILS') {
+            price = { amount: ai.price.amount, currency: 'ILS', confidence: 'low' };
+          } else {
+            const conv = await toILS(ai.price.amount, ai.price.currency).catch(() => null);
+            if (conv) {
+              price = { amount: conv.ils, currency: 'ILS', confidence: 'low', original: { amount: ai.price.amount, currency: norm || ai.price.currency } };
+              log(`price ${ai.price.amount} ${ai.price.currency} → ₪${conv.ils} (${conv.source})`);
+            } else {
+              // unknown/unconvertible currency — never present a foreign number under the ₪ label
+              price = { amount: null, currency: 'ILS', confidence: 'none' };
+              priceWarn = `تعذّر تحويل العملة "${ai.price.currency}" — احسب السعر يدويًا`;
+            }
+          }
+        }
+
         const manifest: Manifest = {
           sourceUrl: url,
           pageTitle: ex.pageTitle,
           name: ai.name, description: ai.description,
-          price: { amount: ai.price_ils, currency: 'ILS', confidence: ai.price_ils ? 'low' : 'none' },
+          price,
           tags: ai.tags, category: s.category || 'toys',
           images,
-          warnings: [...ex.warnings, ...(ai.provider === 'none' && s.aiEnabled ? ['ai_enrichment_unavailable'] : []), 'price_requires_review'],
+          warnings: [...ex.warnings, ...(ai.provider === 'none' && s.aiEnabled ? ['ai_enrichment_unavailable'] : []), ...(priceWarn ? [priceWarn] : []), 'price_requires_review'],
           createdAt: new Date().toISOString(),
         };
         send({ type: 'result', manifest });

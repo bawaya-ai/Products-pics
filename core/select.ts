@@ -60,7 +60,8 @@ export async function selectPool(
       const ar = w / h;
       if (ar < 0.4 || ar > 2.5) continue;                             // banner/strip — not a product photo
       const hash = await aHash(got.buf);
-      if (all.some((c) => hamming(c.aHash, hash) <= 6)) continue;     // near-duplicate of one already kept
+      // dedupe near-duplicates — unless the user turned it off (to keep every variant / redo a search)
+      if (s.dedup !== false && all.some((c) => hamming(c.aHash, hash) <= 6)) continue;
       all.push({ sourceUrl: url, buf: got.buf, contentType: got.contentType, width: w, height: h, megapixels: (w * h) / 1e6, bytes: got.buf.byteLength, aHash: hash });
     } catch { /* undecodable — skip */ }
   }

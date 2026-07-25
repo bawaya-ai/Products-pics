@@ -25,7 +25,10 @@ export interface Manifest {
   pageTitle: string;
   name: LocalizedText;
   description: LocalizedText;
-  price: { amount: number | null; currency: string; confidence: 'high' | 'low' | 'none' };
+  price: {
+    amount: number | null; currency: string; confidence: 'high' | 'low' | 'none';
+    original?: { amount: number; currency: string }; // the price as shown, before → ILS conversion
+  };
   tags: string[];
   category: string;
   images: ProcessedImage[];

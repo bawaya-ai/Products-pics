@@ -10,7 +10,7 @@ export interface Enrichment {
   name: LocalizedText;
   description: LocalizedText;
   tags: string[];
-  price_ils: number | null;
+  price: { amount: number | null; currency: string | null }; // as shown on the page
   imageRoles: { index: number; role: MediaRole }[];
   provider: string;
 }
@@ -18,7 +18,7 @@ export interface Enrichment {
 const EMPTY: Enrichment = {
   name: { en: '', ar: '', he: '' },
   description: { en: '', ar: '', he: '' },
-  tags: [], price_ils: null, imageRoles: [], provider: 'none',
+  tags: [], price: { amount: null, currency: null }, imageRoles: [], provider: 'none',
 };
 
 const SYS = `You are a senior e-commerce product specialist + photo editor for an adult (18+) intimate-products store in the Middle East.
@@ -27,7 +27,7 @@ You receive a product page's title/text and a SHORTLIST of candidate image thumb
  "name":       {"en":"…","ar":"…","he":"…"},          // short, premium product names
  "description":{"en":"…","ar":"…","he":"…"},          // 2-3 tasteful marketing sentences each; Arabic in warm Palestinian-friendly tone; never explicit
  "tags":       ["…"],                                  // 3-6 lowercase tags
- "price_ils":  number|null,                            // price in ILS only if clearly in the text, else null — NEVER guess
+ "price":      {"amount":number|null,"currency":"USD|EUR|GBP|ILS|SAR|AED|…"|null},  // the price AS SHOWN with its currency — else null; NEVER guess
  "images":     [{"index":0,"role":"main|angle|detail|skip"}]  // judge EVERY thumbnail by index
 }
 Image curation rules — KEEP a rich set (aim for AT LEAST 3 good images when the page has them):
@@ -35,7 +35,7 @@ Image curation rules — KEEP a rich set (aim for AT LEAST 3 good images when th
 - "angle"/"detail" = KEEP every other distinct usable view of the SAME product — other angles, close-ups, packaging, AND in-context/lifestyle shots. Do NOT drop a usable image just because it's lifestyle/in-hand; keep it as angle/detail. Keep up to 6.
 - "skip" = ONLY true junk: blurry, watermarked, a collage/multi-product grid, a clearly DIFFERENT product, a size chart / pure text / logo / banner, or a near-duplicate of one you already kept.
 - If thumbnails show DIFFERENT products (e.g. a search page), keep only the ONE product matching the page title (its main + its own extra views); skip the others.
-For price_ils: use PRICE CANDIDATES / any visible price in the text — return the number you see (the user confirms currency). Still never invent a price that isn't shown.
+For price: use PRICE CANDIDATES / any visible price in the text — return the amount AND its currency exactly as shown (e.g. $19.99 → {"amount":19.99,"currency":"USD"}). If no currency symbol/code is visible, set currency to null. Never invent a price that isn't shown.
 Professional, tasteful language only. If the page text is unrelated, derive the name from the kept images.`;
 
 export async function enrich(
@@ -110,10 +110,13 @@ function parse(raw: string): Omit<Enrichment, 'provider'> {
           .filter((x: any) => Number.isInteger(x?.index))
           .map((x: any) => ({ index: x.index, role: (['main', 'angle', 'detail', 'skip'].includes(x.role) ? x.role : 'angle') as MediaRole }))
       : [];
+    const amt = typeof j.price?.amount === 'number' ? j.price.amount
+      : typeof j.price_ils === 'number' ? j.price_ils : null; // tolerate the old shape
+    const cur = typeof j.price?.currency === 'string' ? j.price.currency.trim().slice(0, 8) : null;
     return {
       name: loc(j.name), description: loc(j.description),
       tags: Array.isArray(j.tags) ? j.tags.slice(0, 6).map(str) : [],
-      price_ils: typeof j.price_ils === 'number' && j.price_ils > 0 && j.price_ils < 100000 ? j.price_ils : null,
+      price: { amount: amt != null && amt > 0 && amt < 1e7 ? amt : null, currency: cur || null },
       imageRoles: roles,
     };
   } catch { return { ...EMPTY }; }

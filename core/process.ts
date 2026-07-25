@@ -17,7 +17,13 @@ export interface ProcessOutput {
   warnings: string[];
 }
 
-const BYTE_CAP = 400 * 1024; // keep files lean; retry at lower quality if above
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(n) ? n : lo));
+function hexRgb(hex: string): { r: number; g: number; b: number; alpha: number } {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || '').trim());
+  if (!m) return { r: 255, g: 255, b: 255, alpha: 1 };
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, alpha: 1 };
+}
 
 export async function processImage(
   input: Buffer,
@@ -40,26 +46,48 @@ export async function processImage(
     catch { /* fully-transparent or tiny images can fail trim — keep untrimmed */ }
   }
 
-  // 3) unified square canvas, contain (never crop), transparent or white padding
-  const transparentOut = Boolean(cut);
-  img = img.resize(s.size, s.size, {
-    fit: 'contain',
-    background: transparentOut ? { r: 0, g: 0, b: 0, alpha: 0 } : { r: 255, g: 255, b: 255, alpha: 1 },
-    withoutEnlargement: false,
-  });
+  // Background: transparent only when we have a cutout AND the user kept 'transparent'.
+  const wantTransparent = Boolean(cut) && (!s.bgColor || s.bgColor === 'transparent');
+  const solidBg = hexRgb(s.bgColor && s.bgColor !== 'transparent' ? s.bgColor : '#ffffff');
+  const clearBg = { r: 0, g: 0, b: 0, alpha: 0 };
 
-  // 4) encode with byte cap (webp keeps alpha; png for max-compat transparency)
+  // 3) padding: letterbox/extend with a TRANSPARENT field, so the tone step below can't
+  //    tint the padding — the chosen solid color is applied last, pristine.
+  const pad = clamp(s.padding ?? 0, 0, 40);
+  const inner = Math.max(16, Math.round(s.size * (1 - pad / 100)));
+  let geo = await img.resize(inner, inner, { fit: 'contain', background: clearBg, withoutEnlargement: false }).toBuffer();
+  if (inner < s.size) {
+    const total = s.size - inner, t = Math.floor(total / 2), l = Math.floor(total / 2);
+    geo = await sharp(geo).extend({ top: t, bottom: total - t, left: l, right: total - l, background: clearBg }).toBuffer();
+  }
+
+  // 4) tone on the transparent-padded image (adjusts the subject only; padding stays clear)
+  let tone = sharp(geo);
+  const bright = clamp(s.brightness ?? 100, 50, 150) / 100;
+  const contr = clamp(s.contrast ?? 100, 50, 150) / 100;
+  if (bright !== 1) tone = tone.modulate({ brightness: bright });
+  if (contr !== 1) tone = tone.linear(contr, Math.round(128 * (1 - contr)));
+  const sh = clamp(s.sharpen ?? 0, 0, 100);
+  if (sh > 0) tone = tone.sharpen({ sigma: 0.5 + (sh / 100) * 2.5 });
+  let tonedBuf = await tone.png().toBuffer();
+  // Solid bg chosen → flatten onto the exact color in a SEPARATE pass (sharp reorders an
+  // in-pipeline flatten ahead of tone, which is what tinted the color before).
+  if (!wantTransparent) tonedBuf = await sharp(tonedBuf).flatten({ background: solidBg }).toBuffer();
+
+  // 5) encode with byte cap (webp keeps alpha; png for max-compat transparency)
+  const cap = clamp(s.maxKB ?? 400, 50, 3000) * 1024;
   let quality = s.quality;
   let out: Buffer;
   for (;;) {
+    const enc = sharp(tonedBuf);
     out =
       s.format === 'png'
-        ? await img.png({ compressionLevel: 9, palette: quality < 80 }).toBuffer()
-        : await img.webp({ quality, alphaQuality: 90, effort: 4 }).toBuffer();
-    if (out.byteLength <= BYTE_CAP || quality <= 55) break;
+        ? await enc.png({ compressionLevel: 9, palette: quality < 80 }).toBuffer()
+        : await enc.webp({ quality, alphaQuality: 90, effort: 4 }).toBuffer();
+    if (out.byteLength <= cap || quality <= 45) break;
     quality -= 12;
   }
-  if (out.byteLength > BYTE_CAP) warnings.push(`large_file_${Math.round(out.byteLength / 1024)}KB`);
+  if (out.byteLength > cap) warnings.push(`large_file_${Math.round(out.byteLength / 1024)}KB`);
 
   const meta = await sharp(out).metadata();
   return {
@@ -68,7 +96,7 @@ export async function processImage(
     width: meta.width ?? s.size,
     height: meta.height ?? s.size,
     bytes: out.byteLength,
-    hasAlpha: Boolean(meta.hasAlpha),
+    hasAlpha: Boolean(meta.hasAlpha) && wantTransparent,
     bgProvider,
     warnings,
   };

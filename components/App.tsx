@@ -15,11 +15,15 @@ interface ClientSettings {
   size: number; quality: number; format: 'webp' | 'png'; maxImages: number;
   bgMode: string; aiEnabled: boolean; anthropicModel: string;
   category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google';
+  sharpen: number; brightness: number; contrast: number; padding: number;
+  bgColor: string; maxKB: number; dedup: boolean; convertCurrency: boolean;
 }
 const DEFAULT_SETTINGS: ClientSettings = {
   size: 1024, quality: 88, format: 'webp', maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
+  sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
+  dedup: true, convertCurrency: true,
 };
 type SearchMode = 'product' | 'category' | 'domain';
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
@@ -82,6 +86,22 @@ async function idbDel(k: string) {
   return new Promise<void>((res) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = () => res(); tx.onerror = () => res(); });
 }
 
+// Rough per-run cost estimate (USD), derived from the results we can see.
+const COST = { replicate: 0.006, removebg: 0.2, openai: 0.02, ai: 0.02, firecrawl: 0.003 };
+function estimateCost(items: Manifest[], aiEnabled: boolean, withSearch: boolean) {
+  const bg: Record<string, number> = {};
+  for (const m of items) for (const im of m.images) { if (im.role === 'skip') continue; bg[im.bgProvider] = (bg[im.bgProvider] || 0) + 1; }
+  const rows: { label: string; usd: number }[] = [];
+  let total = 0;
+  for (const [prov, n] of Object.entries(bg)) {
+    const per = prov === 'replicate' ? COST.replicate : prov === 'removebg' ? COST.removebg : prov === 'openai' ? COST.openai : 0;
+    if (per > 0) { const c = per * n; total += c; rows.push({ label: `إزالة خلفية · ${prov} ×${n}`, usd: c }); }
+  }
+  if (aiEnabled && items.length) { const c = COST.ai * items.length; total += c; rows.push({ label: `ذكاء (وصف+اختيار) ×${items.length}`, usd: c }); }
+  if (withSearch && items.length) { const c = COST.firecrawl * items.length; total += c; rows.push({ label: `Firecrawl (بحث/رندرة) ×${items.length}`, usd: c }); }
+  return { total, rows };
+}
+
 export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [settings, setSettings] = useState<ClientSettings>(DEFAULT_SETTINGS);
   const [url, setUrl] = useState('');
@@ -92,6 +112,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [searchMode, setSearchMode] = useState<SearchMode>('product');
   const [numProducts, setNumProducts] = useState(10);
   const [siteScope, setSiteScope] = useState('');
+  const [ranSearch, setRanSearch] = useState(false); // last run used web search / crawl (→ Firecrawl cost)
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
@@ -275,6 +296,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     if (searchMode === 'category') return runDiscoverCrawl({ query: url.trim(), site: siteScope.trim() || undefined, limit: numProducts });
     if (searchMode === 'domain') return runDiscoverCrawl({ url: url.trim(), limit: numProducts });
     // specific product: a URL → scrape it, a name → image-search → one product
+    setRanSearch(!/^https?:\/\//i.test(url.trim())); // a product NAME triggers web search; a URL doesn't
     setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4); setRestored(false);
     pushLog('▶ بدأنا…');
     const m = await scrapeUrl(url.trim());
@@ -283,6 +305,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   }
   // Category (query→product pages) OR Domain (site→product links): discover URLs, scrape each.
   async function runDiscoverCrawl(body: { query?: string; site?: string; url?: string; limit: number }) {
+    setRanSearch(true); // category/domain always use Firecrawl search/crawl
     setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2); setRestored(false);
     pushLog(body.query ? `▶ بحث فئة: "${body.query}"${body.site ? ` داخل ${body.site}` : ''}…` : '▶ زحف على المتجر — بكتشف روابط المنتجات…');
     try {
@@ -486,6 +509,24 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: +e.target.value })} /></div>
                 <div><label className="f">ذكاء (اسم/وصف)</label>
                   <select value={settings.aiEnabled ? '1' : '0'} onChange={(e) => upd({ aiEnabled: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي</option></select></div>
+                <div><label className="f">حدّة · {settings.sharpen}</label>
+                  <input type="range" min={0} max={100} value={settings.sharpen} onChange={(e) => upd({ sharpen: +e.target.value })} /></div>
+                <div><label className="f">سطوع · {settings.brightness}%</label>
+                  <input type="range" min={50} max={150} value={settings.brightness} onChange={(e) => upd({ brightness: +e.target.value })} /></div>
+                <div><label className="f">تباين · {settings.contrast}%</label>
+                  <input type="range" min={50} max={150} value={settings.contrast} onChange={(e) => upd({ contrast: +e.target.value })} /></div>
+                <div><label className="f">هوامش · {settings.padding}%</label>
+                  <input type="range" min={0} max={40} value={settings.padding} onChange={(e) => upd({ padding: +e.target.value })} /></div>
+                <div><label className="f">لون الخلفية</label>
+                  <select value={settings.bgColor} onChange={(e) => upd({ bgColor: e.target.value })}>
+                    <option value="transparent">شفّاف</option><option value="#ffffff">أبيض</option><option value="#000000">أسود</option><option value="#f5f5f5">رمادي فاتح</option><option value="#f8e9ec">وردي ناعم</option>
+                  </select></div>
+                <div><label className="f">أقصى حجم · KB</label>
+                  <input type="number" min={50} max={3000} step={50} value={settings.maxKB} onChange={(e) => upd({ maxKB: Math.min(3000, Math.max(50, +e.target.value || 400)) })} /></div>
+                <div><label className="f">منع التكرار</label>
+                  <select value={settings.dedup ? '1' : '0'} onChange={(e) => upd({ dedup: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي (يبقّي الكل)</option></select></div>
+                <div><label className="f">تحويل العملة → ₪</label>
+                  <select value={settings.convertCurrency ? '1' : '0'} onChange={(e) => upd({ convertCurrency: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي</option></select></div>
               </div>
             )}
             {(busy || progress > 0) && <div className="bar"><i style={{ width: `${progress}%` }} /></div>}
@@ -498,6 +539,23 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
               <button className="btn-ghost" onClick={clearResults} style={{ padding: '6px 14px' }}>🗑 امسح وابدأ جديد</button>
             </div>
           )}
+
+          {(manifest || products.length > 0) && (() => {
+            const items = manifest ? [manifest] : products.filter((p) => !p.skipped).map((p) => p.manifest);
+            if (!items.length) return null;
+            const est = estimateCost(items, settings.aiEnabled, ranSearch);
+            return (
+              <div className="card costcard">
+                <div className="costhead"><span>💰 التكلفة التقديرية</span><strong className="costtotal">~${est.total.toFixed(3)}</strong></div>
+                <div className="costrows">
+                  {est.rows.length ? est.rows.map((r, i) => (
+                    <div key={i} className="costrow"><span>{r.label}</span><span className="costusd">${r.usd.toFixed(3)}</span></div>
+                  )) : <div className="hint">بدون تكلفة — خلفية محلية مجانية + بدون ذكاء.</div>}
+                </div>
+                <div className="hint">تقديري تقريبي (مش فاتورة فعلية). الرصيد الحقيقي لكل مزوّد بلوحة الإدارة.</div>
+              </div>
+            );
+          })()}
 
           {products.length > 0 && (
             <div className="card">
@@ -531,6 +589,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                           {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
+                      {p.manifest.price.original && <div className="pricenote">↩ محوّل من {p.manifest.price.original.amount} {p.manifest.price.original.currency}</div>}
                       <div className="row" style={{ marginTop: 7 }}>
                         {p.saved ? (
                           <span className="chip ok" style={{ flex: 1 }}>✓ محفوظ {p.savedLink && <a href={p.savedLink} target="_blank" rel="noreferrer">فتح ↗</a>}</span>
@@ -584,7 +643,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                 <div className="row" style={{ marginTop: 10 }}>
                   <div><label className="f">السعر ₪ (راجعه يدويًا)</label>
                     <input type="number" min={0} style={{ width: 130 }} value={manifest.price.amount ?? ''} placeholder="0"
-                      onChange={(e) => setManifest((m) => m && { ...m, price: { ...m.price, amount: e.target.value ? +e.target.value : null } })} /></div>
+                      onChange={(e) => setManifest((m) => m && { ...m, price: { ...m.price, amount: e.target.value ? +e.target.value : null } })} />
+                    {manifest.price.original && <span className="pricenote">↩ محوّل من {manifest.price.original.amount} {manifest.price.original.currency}</span>}</div>
                   <div><label className="f">القسم</label>
                     <select style={{ width: 150 }} value={manifest.category} onChange={(e) => setManifest((m) => m && { ...m, category: e.target.value })}>
                       {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}

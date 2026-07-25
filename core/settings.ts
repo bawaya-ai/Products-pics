@@ -10,12 +10,23 @@ export interface Settings {
   storeBase?: string; storeToken?: string; category?: string; publish?: boolean;
   searchProvider?: 'auto' | 'firecrawl' | 'google';
   resendKey?: string; resendFrom?: string;
+  // Phase 7 — output tuning + behavior
+  sharpen: number;       // 0..100 (0 = off)
+  brightness: number;    // 50..150 percent (100 = neutral)
+  contrast: number;      // 50..150 percent (100 = neutral)
+  padding: number;       // 0..40 percent of the canvas around the subject
+  bgColor: string;       // 'transparent' | '#rrggbb'
+  maxKB: number;         // byte cap per image
+  dedup: boolean;        // drop near-duplicate images (toggle off to keep all)
+  convertCurrency: boolean; // convert detected price → ILS
 }
 
 const DEFAULTS: Settings = {
   size: 1024, quality: 88, format: 'webp', maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
+  sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
+  dedup: true, convertCurrency: true,
 };
 
 // setting key → env var name
