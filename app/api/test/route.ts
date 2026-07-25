@@ -93,6 +93,19 @@ export async function POST(req: NextRequest) {
     } catch (e: any) { rows.push(fail('googleCse', 'Google CSE (بحث صور)', String(e?.message))); }
   } else rows.push(skip('googleCse', 'Google CSE (بحث صور)'));
 
+  // Resend — list domains validates a full-access key; a sending-only key is 401 "restricted" (still valid for us)
+  if (s.resendKey) {
+    try {
+      const r = await withTimeout(fetch('https://api.resend.com/domains', { headers: { Authorization: `Bearer ${s.resendKey}` } }));
+      if (r.ok) rows.push(ok('resend', 'Resend (إيميل)'));
+      else {
+        const t = (await r.text().catch(() => '')).toLowerCase();
+        if (r.status === 401 && /restrict|only send|sending/.test(t)) rows.push(ok('resend', 'Resend (إيميل)', 'مفتاح إرسال صالح'));
+        else rows.push(fail('resend', 'Resend (إيميل)', r.status === 401 ? 'مفتاح غير صحيح (401)' : `HTTP ${r.status}`));
+      }
+    } catch (e: any) { rows.push(fail('resend', 'Resend (إيميل)', String(e?.message))); }
+  } else rows.push(skip('resend', 'Resend (إيميل)'));
+
   // Store — POST import with the token + empty images: 400 = token accepted, 401 = bad token
   if (s.storeBase && s.storeToken) {
     try {

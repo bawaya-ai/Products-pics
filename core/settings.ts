@@ -9,6 +9,7 @@ export interface Settings {
   firecrawlKey?: string; googleCseKey?: string; googleCseCx?: string;
   storeBase?: string; storeToken?: string; category?: string; publish?: boolean;
   searchProvider?: 'auto' | 'firecrawl' | 'google';
+  resendKey?: string; resendFrom?: string;
 }
 
 const DEFAULTS: Settings = {
@@ -22,10 +23,11 @@ const ENV_MAP: Record<string, string> = {
   replicateKey: 'REPLICATE_API_TOKEN', removebgKey: 'REMOVEBG_API_KEY', anthropicKey: 'ANTHROPIC_API_KEY',
   openaiKey: 'OPENAI_API_KEY', firecrawlKey: 'FIRECRAWL_API_KEY', googleCseKey: 'GOOGLE_CSE_KEY',
   googleCseCx: 'GOOGLE_CSE_CX', storeBase: 'STORE_BASE', storeToken: 'STORE_IMPORT_TOKEN',
+  resendKey: 'RESEND_API_KEY', resendFrom: 'RESEND_FROM',
 };
 const KEY_FIELDS = Object.keys(ENV_MAP);
 // extra app_config keys that aren't provider KEY_FIELDS but are still admin-editable
-const EXTRA_CONFIG = new Set(['appPassword', 'resendKey', 'resendFrom']);
+const EXTRA_CONFIG = new Set(['appPassword']);
 // which stored values are secrets (encrypted at rest); URLs/ids/senders are not
 const NON_SECRET = new Set(['storeBase', 'googleCseCx', 'resendFrom']);
 
@@ -54,6 +56,7 @@ export async function configStatus(): Promise<Record<string, { set: boolean; sou
   const providers: Record<string, string> = {
     firecrawl: 'firecrawlKey', anthropic: 'anthropicKey', openai: 'openaiKey',
     replicate: 'replicateKey', removebg: 'removebgKey', googleCse: 'googleCseKey', store: 'storeToken',
+    resend: 'resendKey',
   };
   const out: Record<string, { set: boolean; source: 'db' | 'env' | 'none' }> = {};
   for (const [id, key] of Object.entries(providers)) {

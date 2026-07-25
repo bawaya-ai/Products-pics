@@ -154,7 +154,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
 
   // ── admin: keys ──
   const savedSource = (id: string): 'db' | 'env' | 'none' => { const st = cfg?.providers?.[id]; return st?.set ? (st.source as 'db' | 'env') : 'none'; };
-  const PROVIDER_IDS = ['anthropic', 'removebg', 'replicate', 'firecrawl', 'googleCse', 'openai', 'store'];
+  const PROVIDER_IDS = ['anthropic', 'removebg', 'replicate', 'firecrawl', 'googleCse', 'openai', 'store', 'resend'];
   async function saveKeys() {
     const keys: Record<string, string> = {};
     for (const [k, v] of Object.entries(keyDraft)) if (v && v.trim()) keys[k] = v.trim();
