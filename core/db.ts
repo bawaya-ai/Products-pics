@@ -2,7 +2,19 @@
 import { neon } from '@neondatabase/serverless';
 import { createHash, randomBytes, createCipheriv, createDecipheriv, scryptSync, timingSafeEqual } from 'node:crypto';
 
-export const sql = neon(process.env.DATABASE_URL || '');
+// Lazy connection: neon() is NOT constructed at import time, so building the app
+// (or running in an environment without DATABASE_URL — e.g. a Preview deploy) never
+// throws "No database connection string". The client is created on the first query;
+// callers guard with dbConfigured() so no query runs when the DB is absent.
+let _sql: ReturnType<typeof neon> | null = null;
+function getSql(): ReturnType<typeof neon> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error('DATABASE_URL is not set');
+  if (!_sql) _sql = neon(url);
+  return _sql;
+}
+export const sql: ReturnType<typeof neon> = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+  (getSql() as any)(strings, ...values)) as any;
 export const dbConfigured = () => Boolean(process.env.DATABASE_URL);
 
 // ── AES-256-GCM at-rest encryption (key derived from APP_SECRET) ──
