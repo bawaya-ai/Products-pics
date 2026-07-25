@@ -244,3 +244,12 @@ a { color: var(--gold); }
   .ioptions { grid-template-columns: 1fr; }
   .modetab { font-size: 11.5px; letter-spacing: -0.2px; }
 }
+
+/* installed / standalone: respect the notch + home indicator */
+@supports (padding: max(0px)) {
+  body { padding-top: env(safe-area-inset-top); }
+  .wrap { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); padding-bottom: max(72px, env(safe-area-inset-bottom)); }
+}
+@media (display-mode: standalone) {
+  .topbar { padding-top: 4px; }
+}
