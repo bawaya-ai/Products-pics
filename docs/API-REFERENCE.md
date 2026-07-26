@@ -1,4 +1,4 @@
-> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
+> Generated: 2026-07-26 · Commit: 2f26e26 · Generator: make-docs
 
 # API Reference
 
@@ -265,8 +265,12 @@ has a token; otherwise it falls through to the legacy `storeBase`/`storeToken`
 Response — the adapter's `SaveResult` (`adapters/kissplay.ts:9`), mirrored to
 HTTP status by `r.ok`:
 ```ts
-{ ok: boolean, productId?: string, productUrl?: string, error?: string }
+{ ok: boolean, productId?: string, productUrl?: string, error?: string, duplicate?: boolean }
 ```
+`duplicate` is `true` when the store recognized this product's `source_url` as
+already imported — it returns the existing product's `productId`/`productUrl`
+instead of creating a new one; this is still a success response (`ok:true`),
+not an error path.
 
 | Status | Condition |
 |---|---|
@@ -306,8 +310,11 @@ Example:
   "storeId": 3
 }
 
-// ← 200
+// ← 200 (normal — new product created)
 { "ok": true, "productId": "prod_9F2k", "productUrl": "https://shop.example.com/p/prod_9F2k" }
+
+// ← 200 (duplicate — store matched this manifest's source_url to an existing product)
+{ "ok": true, "productId": "prod_9F2k", "productUrl": "https://shop.example.com/p/prod_9F2k", "duplicate": true }
 ```
 
 ### `POST /api/scrape`

@@ -1,4 +1,4 @@
-> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
+> Generated: 2026-07-26 · Commit: 2f26e26 · Generator: make-docs
 
 # Contributing
 
@@ -99,13 +99,18 @@ real type errors, not just syntax mistakes.
 
 ## PR checklist
 
-This repo has no CI — no `.github/workflows` directory exists, so nothing
-below runs automatically on a pull request. Self-check it before requesting
-review:
+`.github/workflows/typecheck.yml` now runs on every push and pull request
+targeting `master` (`pnpm install --frozen-lockfile --ignore-scripts` then
+`pnpm typecheck`), so the check below now runs automatically in CI — this is
+in addition to, not instead of, running it yourself locally before pushing.
+Self-check it before requesting review:
 
-- [ ] `pnpm typecheck` passes with zero errors.
+- [ ] `pnpm typecheck` passes with zero errors locally (and will also run
+      automatically in CI on push/PR to `master` via
+      `.github/workflows/typecheck.yml`).
 
-That's the one check this repo's tooling actually enforces today. There's no
-lint step, no test suite, and no documented review/approval requirement to
-add to this list without inventing one — see the TODO gaps above and in
+That's the one check this repo's tooling enforces today, now backed by CI as
+well as local runs. There's still no lint step, no test suite, and no
+documented review/approval requirement to add to this list without inventing
+one — see the TODO gaps above and in
 [ONBOARDING.md](./ONBOARDING.md#testing-workflow) for what's missing.

@@ -1,4 +1,4 @@
-> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
+> Generated: 2026-07-26 · Commit: 2f26e26 · Generator: make-docs
 
 # Onboarding
 
@@ -177,17 +177,30 @@ complete without the UI, though — every field the UI shows came from a
 
 ## Testing workflow
 
-There is no automated test suite in this repo. `package.json` defines exactly
-four scripts — `dev`, `build`, `start`, `typecheck` — no `test` script exists,
-`git ls-files` finds zero `*.test.*`/`*.spec.*` files, and no test framework
-(Jest, Vitest, Playwright, …) is a dependency.
+There is still no automated test suite in this repo. `package.json` defines
+exactly four scripts — `dev`, `build`, `start`, `typecheck` — no `test`
+script exists, `git ls-files` finds zero `*.test.*`/`*.spec.*` files, and no
+test framework (Jest, Vitest, Playwright, …) is a dependency.
+
+What did change: `.github/workflows/typecheck.yml` is this repo's first CI
+of any kind. It runs on every push and pull request targeting `master` —
+`actions/checkout@v4` → `pnpm/action-setup@v4` (pnpm 9, matching
+`lockfileVersion '9.0'` in `pnpm-lock.yaml`) → `actions/setup-node@v4`
+(Node 22, with pnpm caching) → `pnpm install --frozen-lockfile
+--ignore-scripts` → `pnpm typecheck`. The `--ignore-scripts` is deliberate:
+type-checking only needs `.d.ts` files, not `sharp`/`onnxruntime-node`'s
+native postinstall builds, so CI stays fast and avoids native-build
+flakiness. This closes the "no CI exists" gap that used to be documented
+here — but stay aware of how narrow it is: it's a type-check gate only.
+Nothing in CI runs the app, calls a provider, or asserts behavior, and the
+gap noted below is still real.
 
 > ⚠️ TODO(owner): decide on a test strategy. The pure, network-free pipeline
 > modules — `core/select.ts` (dedup/ranking), `core/currency.ts` (conversion
 > math), `core/extract.ts`'s JSON-LD parsing — are the cheapest place to start
 > unit tests, since they need no provider keys or live network access.
 
-Until that exists, the only mechanical check available is the type checker:
+Locally, the same mechanical check CI runs is one command:
 
 ```bash
 pnpm typecheck   # tsc --noEmit — see docs/CONTRIBUTING.md
@@ -198,7 +211,7 @@ the affected flow by hand: paste a real product URL for `/api/scrape`
 changes, or drive the admin panel for `/api/config`, `/api/stores`, or
 `/api/users` changes. There's no seeded fixture data and no mock provider
 layer in this codebase — manual testing against real (or a low-cost dev)
-provider keys is the only path today.
+provider keys is the only path today, and CI doesn't do any of it for you.
 
 ## Team conventions
 

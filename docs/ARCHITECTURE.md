@@ -1,4 +1,4 @@
-> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
+> Generated: 2026-07-26 · Commit: 2f26e26 · Generator: make-docs
 
 # Architecture — scraper-pro
 
@@ -66,7 +66,7 @@ graph TB
   App --> Instagram
   App --> Fx
   App --> Resend
-  App -->|"manifest + image bytes, video = URL only (ADR-0005)"| Store
+  App -->|"manifest + image bytes, video = URL only (ADR-0005)<br/>source_url -> optional duplicate flag (ADR-0007)"| Store
   App -->|one-time weight download| GitHub
   App -->|fetch page / images / video headers| SourceSite
   Store -->|downloads video bytes itself| SourceSite
@@ -102,7 +102,7 @@ Containers, not services — everything under "Vercel deployment" above is **one
 | Currency | `core/currency.ts` | Live-rate → ILS conversion, price cross-check helper, fallback rate table. |
 | Budget | `core/budget.ts` | Deadline-aware timeout helpers threaded through every provider call. |
 | DB | `core/db.ts` | AES-256-GCM encrypt/decrypt, scrypt password hashing, all SQL (`app_config`/`stores`/`users`). |
-| Save adapter | `adapters/kissplay.ts` | Manifest → the Kiss Play store's `/api/scraper/import`. |
+| Save adapter | `adapters/kissplay.ts` | Manifest → the Kiss Play store's `/api/scraper/import`; surfaces the store's duplicate-save short-circuit. See [ADR-0007](./adr/0007-duplicate-save-protection.md). |
 | UI | `components/App.tsx`, `app/page.tsx`, `app/admin/page.tsx`, `app/login/page.tsx`, `app/reset/page.tsx` | Single client component switched by a server-set `mode: 'tool' \| 'admin'` prop; standalone login/reset pages. |
 
 ## 4. Flows
@@ -257,9 +257,14 @@ sequenceDiagram
     Rt->>Ad: saveToKissPlay(manifest, settings)
     Ad->>Ad: keep non-'skip' images, sort main-first
     Ad->>Ad: hasPrice gate -> is_active:false if no reviewed positive price
-    Ad->>St: POST {storeBase}/api/scraper/import<br/>X-Scraper-Token header<br/>images: b64, videos: URL+metadata only
-    St-->>Ad: {ok, product_id, product_url} or {ok:false, error}
-    Ad-->>Rt: SaveResult
+    Ad->>St: POST {storeBase}/api/scraper/import<br/>X-Scraper-Token header<br/>source_url, images: b64, videos: URL+metadata only
+    alt store matches source_url to an existing product (ADR-0007)
+      St-->>Ad: {ok:true, duplicate:true, product_id, product_url}<br/>short-circuits before creating a new product
+    else no match -> create product
+      St-->>Ad: {ok:true, product_id, product_url} or {ok:false, error}
+    end
+    Ad->>Ad: read d.duplicate off the store's JSON response
+    Ad-->>Rt: SaveResult {ok, productId, productUrl, duplicate}
     Rt-->>U: 200 (r.ok) or 502 (adapter failure)
   end
 ```
@@ -267,6 +272,18 @@ sequenceDiagram
 Source: `app/api/save/route.ts:14-45`, `adapters/kissplay.ts:11-66`, `core/db.ts:97-107` (token
 decryption inside `resolveRow()`). The `is_active:false`-on-no-price safety invariant
 (`adapters/kissplay.ts:20-23,33`) means nothing goes live at ₪0 regardless of the `publish` setting.
+
+The store enforces idempotency by `source_url`; this app only surfaces the result. This app
+already sent `source_url: m.sourceUrl` in the payload (`adapters/kissplay.ts:34`) before the store
+added the check — no payload change was needed here, only reading the extra `duplicate` field off
+the response (`adapters/kissplay.ts:62`) and forwarding it through `NextResponse.json(r, ...)`
+unchanged (`app/api/save/route.ts:40-41`). The UI treats a duplicate as a successful save, not an
+error: `save()` shows "↩ محفوظ مسبقًا" instead of "✓ انحفظ بالمتجر" (`components/App.tsx:416`), and
+batch-mode `saveProduct()` logs a warn-level "↩ منتج N محفوظ مسبقًا" line while still marking the
+product saved (`components/App.tsx:434,436`). See
+[ADR-0007](./adr/0007-duplicate-save-protection.md). This repo does not implement or control the
+store's matching logic (schema, indexing, SQL) — that lives in a different repo; see
+[Boundaries](#6-boundaries--what-this-system-deliberately-does-not-do).
 
 ### 4.4 Video probe + download
 
@@ -326,6 +343,7 @@ Inline pointers into the ADR log — see each file for Context/Decision/Conseque
 - Google service-account auth is hand-rolled, not a library — [ADR-0004](./adr/0004-hand-rolled-google-service-account-jwt.md)
 - Video bytes never transit this app at scrape time — [ADR-0005](./adr/0005-store-side-video-download.md)
 - Image dedup is content-aware (perceptual hash), not URL-based — [ADR-0006](./adr/0006-perceptual-hash-image-dedup.md)
+- Duplicate-save protection is enforced store-side by `source_url`; this app surfaces the result — [ADR-0007](./adr/0007-duplicate-save-protection.md)
 
 ## 6. Boundaries — what this system deliberately does NOT do
 
@@ -340,8 +358,14 @@ Inline pointers into the ADR log — see each file for Context/Decision/Conseque
   synchronously inside one Vercel Node serverless function for the duration of that HTTP request
   (`maxDuration: 300` on `/api/scrape`, `/api/save`, `/api/video-fetch`, `vercel.json:1-8`). There
   is no job table, no retry queue, and no process outside the request/response cycle.
-- **No CI/CD pipeline.** No `.github/workflows` directory exists in the repo; there is no
-  automated test suite (`package.json` has no `test` script) and no ESLint config. Deploys are
+- **CI is type-check-only — no test suite, no CD.** `.github/workflows/typecheck.yml` runs on every
+  push/PR to `master`: checkout → pnpm 9 → Node 22 → `pnpm install --frozen-lockfile
+  --ignore-scripts` → `pnpm typecheck` (`tsc --noEmit`). This is the repo's first CI of any kind
+  and closes the gap previously documented here, but it stays narrow on purpose: `--ignore-scripts`
+  skips `sharp`/`onnxruntime-node`'s native postinstall builds because the type-check only needs
+  their `.d.ts` files, which keeps the job fast and avoids native-build flakiness
+  (`.github/workflows/typecheck.yml:28-30`). There is still no automated test suite (`package.json`
+  has no `test` script) and no ESLint config, and CI does not deploy anything — deploys stay
   manual: `vercel` for preview, `vercel --prod` for production.
 - **No client-bundled secrets.** A repo-wide grep for `NEXT_PUBLIC_*` finds no matches — every
   provider key and store token stays server-side; the client only ever sees boolean "is a key
@@ -367,3 +391,8 @@ Inline pointers into the ADR log — see each file for Context/Decision/Conseque
 - **No IP-based rate limiting or WAF.** The only throttling is a per-user daily counter on
   `/api/scrape` (`DAILY_RUN_CAP`, default 400) and `/api/discover` (`DAILY_DISCOVER_CAP`, default
   150), both stored as `app_config` rows keyed by day and user id (`core/db.ts:79-86`).
+- **No duplicate-detection logic of its own.** This app never owns product storage, so it cannot
+  independently know whether a manifest it's about to save already exists as a live product — that
+  check (matching on `source_url`) runs store-side. This app only reads the `duplicate` field the
+  store returns and surfaces it to the operator (`adapters/kissplay.ts:62`). See
+  [ADR-0007](./adr/0007-duplicate-save-protection.md).

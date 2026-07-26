@@ -1,39 +1,77 @@
-> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
+> Generated: 2026-07-26 · Commit: 2f26e26 · Generator: make-docs
 
 # Deployment
 
 Scraper Pro deploys to Vercel as a single Next.js app (Node runtime functions).
-There is no CI/CD pipeline in this repo — deploys are triggered manually from a
-developer's machine with the Vercel CLI.
+A GitHub Actions workflow now type-checks every push/PR to `master`, but there
+is still no CI/CD pipeline that builds, tests, lints, or deploys — deploys are
+still triggered manually from a developer's machine with the Vercel CLI.
 
-## No CI/CD pipeline
+## CI: a type-check gate only
 
-Confirmed absences, not omissions:
+As of commit 2f26e26 this repo has its first CI workflow ever:
+[`.github/workflows/typecheck.yml`](../.github/workflows/typecheck.yml). This
+directly closes the "no CI exists" gap this doc used to document — but it is
+narrow, and should not be read as "the repo now has CI/CD":
 
-- No `.github/workflows` directory anywhere in the repo.
-- No `.yml`/`.yaml` file at the project level (the only YAML files in the tree are
-  `pnpm-workspace.yaml`/`pnpm-lock.yaml` and third-party files under `node_modules/`).
+- **Triggers:** `push` to `[master]` and `pull_request` targeting `[master]`.
+- **Steps:** `actions/checkout@v4` → `pnpm/action-setup@v4` (pinned to version
+  `9`, matching `lockfileVersion: '9.0'` in `pnpm-lock.yaml`) →
+  `actions/setup-node@v4` (`node-version: 22`, with pnpm caching) →
+  `pnpm install --frozen-lockfile --ignore-scripts` → `pnpm typecheck`
+  (i.e. `tsc --noEmit`).
+- **Why `--ignore-scripts`:** type-checking only needs the `.d.ts` files
+  already present in `node_modules`, not `sharp`/`onnxruntime-node`'s native
+  postinstall builds — skipping those keeps the job fast and avoids
+  native-build flakiness in CI.
+
+**What this workflow is not:**
+
+- Not a test suite — there is still no test runner or test script in
+  `package.json`.
+- Not a lint gate — there is still no ESLint config or
+  `eslint`/`eslint-config-next` package.
+- Not deploy automation — a green or red check on this workflow has no wired
+  effect on Vercel. The deploy step is still the manual `vercel deploy --prod`
+  (a.k.a. `vercel --prod`) documented below; CI passing or failing does not
+  gate it in either direction.
+
+Confirmed still absent, unchanged from before:
+
+- No other `.yml`/`.yaml` file at the project level besides this workflow
+  (the only other YAML files in the tree are
+  `pnpm-workspace.yaml`/`pnpm-lock.yaml` and third-party files under
+  `node_modules/`).
 - No test script in `package.json` and no test runner dependency.
 - No ESLint config and no `eslint`/`eslint-config-next` package.
 
-There is no automated gate between a commit and a production deploy. `next build`
-and `tsc --noEmit` run only if a developer runs them — nothing in the repo forces
-it. Treat every `vercel --prod` as a manual release: whoever runs it is the
-release gate.
+There is still no automated gate between a commit and a production deploy —
+`vercel --prod` is a manual command run from a developer's machine, and
+nothing in this repo ties it to CI status. What changed: `tsc --noEmit` (via
+`pnpm typecheck`) now runs automatically in GitHub Actions on every push/PR to
+`master`, so a broken build is caught on the commit itself — but `next build`
+is still never run in CI, and CI's pass/fail state has no wired effect on
+whether someone goes on to run `vercel --prod`. Treat every `vercel --prod` as
+a manual release: whoever runs it is still the release gate.
 
 ## Pipeline: commit → live
 
 ```mermaid
 flowchart LR
     A[Developer commits\nto local git] --> B[Developer runs\npnpm typecheck / pnpm build\n(manual, not enforced)]
+    A --> G[GitHub Actions: typecheck.yml\n(automatic on push/PR to master,\ntype-check only)]
     B --> C[Developer runs\nvercel --prod]
     C --> D[Vercel builds the project\n(next build, Node runtime)]
     D --> E[Functions deployed per\nvercel.json overrides]
     E --> F[Live at the production\ndomain(s)]
 ```
 
-No step between A and C is automated. Steps D–F are Vercel platform behavior
-triggered by the CLI, not by a repo-defined workflow.
+Pushing to `master` (or opening a PR against it) now also triggers G
+automatically — but G is a side branch, not a gate: it doesn't feed back into
+B or C, and nothing stops `vercel --prod` from running regardless of whether
+G passed or failed. No step between A and C blocks the deploy; C remains a
+fully manual action a developer runs from their machine. Steps D–F are Vercel
+platform behavior triggered by the CLI, not by a repo-defined workflow.
 
 ## Manual deploy steps
 
@@ -67,11 +105,14 @@ vercel --prod     # promotes/builds to production
   and `APP_SECRET` is unset or under 16 characters — sessions and encrypted
   config storage both derive their key from it.
 
-> ⚠️ TODO(owner): there is no documented pre-deploy checklist in the repo
-> (no `pnpm typecheck && pnpm build` step is enforced anywhere). Confirm
-> whether the team runs these manually before every `vercel --prod`, and if
-> so, write that down as a required step rather than leaving it tribal
-> knowledge.
+> ⚠️ TODO(owner): there is still no documented **pre-deploy** checklist in
+> the repo. `.github/workflows/typecheck.yml` now runs `pnpm typecheck`
+> automatically on every push/PR to `master`, so that part of this gap is
+> narrower than it used to be — but it's a CI check on the commit, not a
+> step wired into the deploy itself, and it never runs `pnpm build`. Confirm
+> whether the team also runs `pnpm build` manually before every
+> `vercel --prod`, and if so, write that down as a required step rather than
+> leaving it tribal knowledge.
 
 ## Vercel function configuration (`vercel.json`)
 
@@ -233,7 +274,8 @@ production hosts — `app/api/auth/request-reset/route.ts:29`).
    checks touch it.
 
 None of this is scripted anywhere in the repo — there's no smoke-test file to
-run. Do it by hand (or write one; see the CI/CD gap above).
+run. Do it by hand (or write one; the CI workflow above only type-checks, it
+runs no tests and does no post-deploy verification).
 
 ## Related docs
 
