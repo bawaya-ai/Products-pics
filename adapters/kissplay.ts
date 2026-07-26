@@ -6,7 +6,7 @@
 import type { Manifest } from '../core/types';
 import type { Settings } from '../core/settings';
 
-export interface SaveResult { ok: boolean; productId?: string; productUrl?: string; error?: string }
+export interface SaveResult { ok: boolean; productId?: string; productUrl?: string; error?: string; duplicate?: boolean }
 
 export async function saveToKissPlay(m: Manifest, s: Settings): Promise<SaveResult> {
   if (!s.storeBase || !s.storeToken) return { ok: false, error: 'store base URL or import token missing (Settings)' };
@@ -59,7 +59,7 @@ export async function saveToKissPlay(m: Manifest, s: Settings): Promise<SaveResu
     });
     const d = (await r.json().catch(() => ({}))) as any;
     if (!r.ok || !d.ok) return { ok: false, error: d.error || `store responded ${r.status}` };
-    return { ok: true, productId: d.product_id, productUrl: d.product_url };
+    return { ok: true, productId: d.product_id, productUrl: d.product_url, duplicate: Boolean(d.duplicate) };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }

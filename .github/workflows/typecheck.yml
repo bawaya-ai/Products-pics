@@ -1,0 +1,33 @@
+name: Typecheck
+
+# Safety net for a solo-dev repo with no other CI: catches a broken build
+# before it reaches Vercel, not after. Deliberately narrow — this is a type
+# check, not a test suite (the repo has no automated tests yet).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --ignore-scripts: typecheck only needs the .d.ts files in node_modules,
+      # not sharp/onnxruntime-node's native postinstall builds — skipping them
+      # keeps this job fast and avoids depending on native-build tooling in CI.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - run: pnpm typecheck

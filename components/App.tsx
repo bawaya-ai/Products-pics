@@ -400,7 +400,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const setField = (path: 'name' | 'description', lang: 'en' | 'ar' | 'he', v: string) =>
     setManifest((m) => m && { ...m, [path]: { ...m[path], [lang]: v } });
 
-  async function postSave(m: Manifest): Promise<{ ok: boolean; productId?: string; productUrl?: string; error?: string }> {
+  async function postSave(m: Manifest): Promise<{ ok: boolean; productId?: string; productUrl?: string; error?: string; duplicate?: boolean }> {
     const storeId = destStore === '' ? undefined : destStore === 'env' ? 'env' : Number(destStore);
     try {
       const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manifest: m, adapter: 'kiss-play', settings, storeId }) });
@@ -412,7 +412,9 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     setBusy(true); setSaveMsg(null);
     if (adapter === 'json') { await downloadZip(manifest); setBusy(false); return; }
     const d = await postSave(manifest);
-    setSaveMsg(d.ok ? { ok: true, text: `✓ انحفظ بالمتجر — ${d.productId}`, link: d.productUrl } : { ok: false, text: `فشل الحفظ: ${d.error || 'خطأ'}` });
+    setSaveMsg(d.ok
+      ? { ok: true, text: d.duplicate ? `↩ محفوظ مسبقًا — فتحنا نفس المنتج بدل ما ننشئ نسخة ثانية (${d.productId})` : `✓ انحفظ بالمتجر — ${d.productId}`, link: d.productUrl }
+      : { ok: false, text: `فشل الحفظ: ${d.error || 'خطأ'}` });
     setBusy(false);
   }
 
@@ -431,6 +433,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     const d = await postSave(p.manifest);
     setProducts((ps) => ps.map((x, i) => (i === idx ? { ...x, saving: false, saved: d.ok ? d.productId : undefined, savedLink: d.productUrl } : x)));
     if (!d.ok) pushLog(`✗ حفظ منتج ${idx + 1}: ${d.error || 'خطأ'}`, 'err');
+    else if (d.duplicate) pushLog(`↩ منتج ${idx + 1} محفوظ مسبقًا — فتحنا نفس النسخة`, 'warn');
   }
   async function saveAllProducts() {
     if (busy) return;
