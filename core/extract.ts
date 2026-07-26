@@ -37,6 +37,28 @@ function decode(u: string): string {
   // params — without unescaping, the signature params are lost and the url 403s
   return u.replace(/\\u002F/gi, '/').replace(/\\u0026/gi, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&').replace(/\\"/g, '');
 }
+
+// AliExpress/Alibaba CDN (alicdn.com, aliexpress-media.com) serves every product photo
+// under /kf/<hash> at whatever resolution the URL asks for — but AliExpress's newer
+// client-side-rendered PDP only leaks THUMBNAIL urls into the raw (pre-JS) HTML, e.g.
+//   kf/<hash>/-.jpg_80x80.jpg          (list/related-item thumbnail shape)
+//   kf/<hash>.jpg_220x220q75.jpg       (gallery-strip thumbnail shape)
+// Stripping the resize suffix back to the bare kf/<hash>.jpg returns the FULL-resolution
+// original (verified live: 80x80 icons → 100-500KB real photos) — no JS render needed.
+function upgradeAliExpressImage(u: string): string {
+  try {
+    const p = new URL(u);
+    if (!/(?:^|\.)alicdn\.com$/i.test(p.hostname) && !/(?:^|\.)aliexpress-media\.com$/i.test(p.hostname)) return u;
+    if (!/\/kf\//i.test(p.pathname)) return u;
+    let path = p.pathname
+      .replace(/\/-\.(jpg|jpeg|png|webp)_\d{2,4}x\d{2,4}(?:q\d{1,3})?\.(?:jpg|jpeg|png|webp)$/i, '.$1')
+      .replace(/(\.(?:jpg|jpeg|png|webp))_\d{2,4}x\d{2,4}(?:q\d{1,3})?\.(?:jpg|jpeg|png|webp)$/i, '$1');
+    if (path === p.pathname) return u; // no known thumbnail suffix — leave untouched
+    p.pathname = path;
+    p.search = '';
+    return p.href;
+  } catch { return u; }
+}
 function baseKey(u: string): string {
   return u.split('?')[0].replace(/(_\d{2,4}x\d{2,4}|-\d{2,4}x\d{2,4}|_\d{2,4}w)?\.(jpg|jpeg|png|webp|avif)$/i, '');
 }
@@ -88,6 +110,7 @@ export function collectImageUrls(html: string, baseHref: string, limit = 12): st
     if (u.startsWith('//')) u = 'https:' + u;
     else if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, baseHref).href; } catch { return; } }
     if (!/^https?:\/\//i.test(u) || JUNK.test(u)) return;
+    u = upgradeAliExpressImage(u);
     const b = baseKey(u);
     if (!found.has(b)) { found.set(b, u); order.push(b); }
     else if (u.length > found.get(b)!.length) found.set(b, u);
@@ -182,6 +205,7 @@ export async function extractMedia(
       try { u = new URL(u, target.href).href; } catch { return; } // relative → absolute (against page URL)
     }
     if (!/^https?:\/\//i.test(u) || JUNK.test(u)) return;
+    u = upgradeAliExpressImage(u);
     const b = baseKey(u);
     const prev = found.get(b);
     if (!prev) { found.set(b, u); ordered.push(b); }
