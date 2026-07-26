@@ -1,69 +1,106 @@
-# 🛒 Scraper Pro
+> Generated: 2026-07-26 · Commit: 0f2c759 · Generator: make-docs
 
-Universal product scraper: paste a product URL → get **background-free, unified-size,
-high-quality images** + AI-written copy → push into **any store** via adapters.
+# Scraper Pro
 
-Built as a standalone **Next.js app for Vercel** (Node runtime, so `sharp` + local
-ONNX cutout models run natively). Reusable across projects — the core is
-store-agnostic; each project plugs a small adapter.
+Scraper Pro turns a product URL — or a free-text product name — into a store-ready
+listing. It extracts candidate images from the source page, removes backgrounds
+through a fallback provider chain (Replicate → remove.bg → free local ONNX →
+optional OpenAI), resizes and encodes them to a uniform spec with `sharp`, writes
+AI-generated multilingual (AR/HE/EN) name and description copy, cross-checks and
+converts the price, and optionally probes source product video. The result is a
+store-agnostic `Manifest` (`core/types.ts`) that a small adapter pushes into a
+destination store, or that ships as a downloadable ZIP. Two roles use it day to
+day: **operators**, who run and review scrapes, and **admins**, who additionally
+manage provider keys, destination stores, and user accounts.
 
----
+## Stack
 
-## What it does
+| Layer | Technology | Version | Notes |
+|---|---|---|---|
+| Framework | Next.js (App Router) | `^15.3.0` | every route handler sets `runtime='nodejs'`, `dynamic='force-dynamic'` |
+| UI | React / ReactDOM | `^19.0.0` | one client component (`components/App.tsx`) renders both the tool and admin surfaces |
+| Language | TypeScript | `^5.7.2` | `strict: true`, path alias `@/*` (`tsconfig.json`) |
+| Runtime | Node.js | not pinned in `package.json`/`.nvmrc` | Vercel serverless Node functions |
+| Database | Neon Postgres (serverless) | `@neondatabase/serverless ^1.1.0` | optional — enables encrypted config, stores, users; app runs env-only without it |
+| Image processing | sharp | `^0.34.1` | cutout / trim / resize / encode pipeline |
+| Local ML | onnxruntime-node | `^1.21.0` | free local ISNet/U²-Net background-removal fallback, no key required |
+| Client-side export | jszip | `^3.10.1` | ZIP-download save adapter |
+| Hosting | Vercel | — | `vercel.json` sets per-route `maxDuration`/`memory` |
+| Package manager | pnpm | — | `pnpm-lock.yaml`, `pnpm-workspace.yaml` |
 
-```
-URL → extract media → per image: fetch → remove background → unify size/quality
-    → AI enrich (name/description/translation + image roles) → preview/edit → save
-```
-
-- **Extraction** — URL query params (Temu `top_gallery_url`), `og:image`, `<img>`/`srcset`,
-  inline-JSON image links, and optional **Firecrawl** rendered fetch for JS-heavy pages.
-- **Background removal** — best-available chain: **Replicate** (BiRefNet/RMBG) → **remove.bg**
-  → **free local ISNet ONNX** (no key, model auto-downloads once) → optional OpenAI image edit.
-- **Processing (Sharp)** — cutout → trim → **unified N×N square**, `contain` (never crops),
-  transparent background, WebP/PNG, byte-capped.
-- **AI enrichment** — **Claude Opus** (fallback GPT-4o) writes premium names + descriptions
-  in AR/HE/EN and classifies each image (main/angle/detail/skip).
-- **Save** — `kiss-play` adapter POSTs to the store's token-guarded import endpoint (store
-  stores images in its own R2 + D1); or `json` adapter downloads a ZIP (images + manifest).
-
-## Output contract (`Manifest`)
-
-Store-agnostic JSON — see `core/types.ts`. Any project can consume it directly.
-
-## Run locally
+## Quick start
 
 ```bash
-pnpm install          # approves sharp + onnxruntime-node native builds
-pnpm dev              # http://localhost:3111
+git clone <this-repo-url> scraper-pro
+cd scraper-pro
+pnpm install                 # approves native builds for sharp + onnxruntime-node
+cp .env.example .env.local   # every var is optional locally — see docs/CONFIGURATION.md
+pnpm dev                     # http://localhost:3111
 ```
 
-Paste a product URL, open **⚙️ الإعدادات**, add your keys (or set them via env), press
-**معالجة**, review, then **حفظ للمتجر** / **تنزيل ZIP**.
+No environment variable is required to boot locally. Every provider key
+(Anthropic, OpenAI, Replicate, remove.bg, Firecrawl, Google CSE, the store
+token, …) can instead be entered through the in-app **Admin → Integrations &
+Keys** panel and stored encrypted in Neon Postgres, if `DATABASE_URL` is set.
+`APP_SECRET` (≥16 chars) becomes required once `NODE_ENV=production` — the app
+fails closed without it. Full reference, including which vars are server-only
+vs. client-visible: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
-## Deploy to Vercel
+| Command | Purpose |
+|---|---|
+| `pnpm dev` | dev server on `:3111` |
+| `pnpm build` | production build |
+| `pnpm start` | run the production build on `:3111` |
+| `pnpm typecheck` | `tsc --noEmit` |
+
+There is no `test` or `lint` script — no automated tests and no ESLint config
+exist in this repo (see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)).
+
+### Deploy
 
 ```bash
 vercel            # first run links the project
-vercel --prod     # production
+vercel --prod     # production deploy
 ```
 
-Set the env vars from `.env.example` in **Vercel → Project → Settings → Environment
-Variables** (Node runtime; `vercel.json` raises the function timeout to 60s).
+Deploys are manual via the Vercel CLI — there is no CI/CD pipeline. Full
+pipeline, verification checklist, and rollback notes:
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
-## Add a new project (reuse)
+## Repository layout
 
-1. Add an adapter in `adapters/yourstore.ts` that turns a `Manifest` into your store's API/DB.
-2. Wire it in `app/api/save/route.ts` and the UI's adapter dropdown.
-   The extraction + cutout + AI core stays untouched.
+```
+scraper-pro/
+├── app/               # Next.js App Router: pages + API routes
+│   ├── api/           #   route.ts handlers — auth, config, scrape, save, stores, users, ...
+│   ├── admin/         #   /admin management UI (admin role only, server-redirected otherwise)
+│   ├── login/, reset/ #   standalone auth pages (outside components/App.tsx)
+│   └── layout.tsx, page.tsx, manifest.ts, globals.css
+├── core/              # framework-free pipeline + data layer: auth, db, settings,
+│                      #   extract, select, enrich, bgremove, localbg, process,
+│                      #   watermark, websearch, discovery, googleauth, instagram,
+│                      #   video, currency, budget, mailer, types
+├── adapters/          # Manifest → destination store (kissplay.ts today)
+├── components/        # App.tsx (tool + admin UI), PWA.tsx
+├── public/            # PWA icons + service worker (sw.js)
+├── scripts/           # one-off scripts (gen-icons.mjs)
+├── docs/              # this documentation suite
+├── middleware.ts      # Edge: coarse cookie-presence gate, admin-subdomain redirect
+├── next.config.mjs    # serverExternalPackages: sharp, onnxruntime-node
+├── vercel.json        # per-route maxDuration/memory overrides
+└── .env.example       # optional server env vars (all overridable via Admin UI)
+```
 
-## Keys & cost (per product)
+## Documentation suite
 
-| Service | When | Cost |
-|---|---|---|
-| Local ISNet cutout | default | **free** |
-| Replicate cutout | optional (higher quality) | ~$0.002–0.01 |
-| Claude/OpenAI enrich | optional | ~$0.01–0.02 |
-| Firecrawl | full galleries / hard sites | ~$19/mo plan |
-
-Temu's main image is free from the URL — a minimal run costs **$0/product**.
+| Doc | Covers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Containers, key flows, design decisions, boundaries |
+| [docs/API-REFERENCE.md](docs/API-REFERENCE.md) | Every route: auth, request/response, error codes |
+| [docs/DATABASE.md](docs/DATABASE.md) | Neon Postgres schema (`app_config`, `stores`, `users`) |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every env var: required?, source, resolution order |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deploy pipeline, manual steps, rollback, checklist |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Failure modes: symptom → confirm → mitigate → escalate |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+| [docs/ONBOARDING.md](docs/ONBOARDING.md) | Day-1 guide: one request traced end to end |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Branching, commits, tests/lint/typecheck, PR checklist |
