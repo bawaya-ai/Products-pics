@@ -22,6 +22,19 @@ export interface ProcessedImage {
 
 export interface LocalizedText { en: string; ar: string; he: string }
 
+/** A discovered product video. URLs may be signed/expiring (Instagram) — the store
+ *  downloads the bytes server-side at save time; the ZIP downloads them client-side. */
+export interface ManifestVideo {
+  id: string;
+  url: string;                      // source URL
+  poster?: string;
+  width?: number; height?: number; durationS?: number; bytes?: number;
+  contentType?: string;             // 'video/mp4' | 'video/webm'
+  source: 'og' | 'tag' | 'json' | 'raw' | 'instagram';
+  probe: 'ok' | 'partial' | 'failed'; // failed/partial candidates are KEPT (quality-first)
+  keep: boolean;                    // review toggle; first kept = primary
+}
+
 export interface Manifest {
   sourceUrl: string;
   pageTitle: string;
@@ -34,7 +47,9 @@ export interface Manifest {
   tags: string[];
   category: string;
   images: ProcessedImage[];
-  /** product video found on the page (streamed from source; not re-encoded) */
+  /** discovered product videos (≤3, ranked best-first) */
+  videos?: ManifestVideo[];
+  /** @deprecated legacy single-video field — mirrors videos.find(v => v.keep); kept for old saved manifests */
   video?: { url: string; poster?: string };
   warnings: string[];
   createdAt: string;
@@ -45,5 +60,7 @@ export type ProgressEvent =
   | { type: 'stage'; stage: string; detail?: string }
   | { type: 'image'; index: number; total: number; status: 'processing' | 'done' | 'failed'; detail?: string }
   | { type: 'warn'; message: string }
+  /** MEASURED cost from an actual provider response (AI tokens are exact; bg providers per real call) */
+  | { type: 'cost'; label: string; usd: number; detail?: string }
   | { type: 'result'; manifest: Manifest }
   | { type: 'error'; message: string };

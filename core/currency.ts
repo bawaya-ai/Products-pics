@@ -4,8 +4,10 @@
 
 const FALLBACK: Record<string, number> = { // <cur> → ILS multiplier (approx)
   USD: 3.7, EUR: 4.0, GBP: 4.7, ILS: 1, SAR: 0.99, AED: 1.01, JOD: 5.2, EGP: 0.075, TRY: 0.11, KWD: 12, CAD: 2.7, AUD: 2.4,
+  CNY: 0.52, JPY: 0.025,
 };
-const SYMBOLS: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '₪': 'ILS', '₺': 'TRY', 'C$': 'CAD', 'A$': 'AUD' };
+// ¥ maps to CNY (not JPY) on purpose — this scraper's actual sources are China-side (Temu/AliExpress)
+const SYMBOLS: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '₪': 'ILS', '₺': 'TRY', 'C$': 'CAD', 'A$': 'AUD', '¥': 'CNY', 'ر.س': 'SAR', 'د.إ': 'AED' };
 
 let cache: { rates: Record<string, number>; at: number } | null = null;
 const TTL = 1000 * 60 * 60 * 6; // 6h
@@ -30,6 +32,20 @@ async function liveRates(): Promise<Record<string, number> | null> {
     }
   } catch { /* fall back */ }
   return null;
+}
+
+/** Numeric amounts mined from the "PRICE CANDIDATES: …" line extract.ts prepends to pageText.
+ *  Used to CROSS-CHECK the AI's price: an amount that appears in neither the candidates nor
+ *  the page text is a hallucination (or an injected instruction) and must not be trusted. */
+export function candidateAmounts(pageText: string): number[] {
+  const m = /^PRICE CANDIDATES:\s*([^\n]+)/.exec(pageText || '');
+  if (!m) return [];
+  const out = new Set<number>();
+  for (const t of m[1].matchAll(/\d{1,6}(?:[.,]\d{1,2})?/g)) {
+    const v = parseFloat(t[0].replace(',', '.'));
+    if (Number.isFinite(v) && v > 0) out.add(v);
+  }
+  return [...out];
 }
 
 /** Convert `amount` in `currency` → ILS. Returns { ils, rate, source } or null if unknown currency. */

@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveSettings } from '@/core/settings';
 import { requireRole } from '@/core/auth';
+import { bumpCounter, dbConfigured } from '@/core/db';
 import { assertPublicUrl, collectProductLinks } from '@/core/extract';
 import { searchProductPages } from '@/core/websearch';
 
@@ -40,6 +41,7 @@ async function firecrawlHtml(url: string, key?: string): Promise<string | null> 
 async function getHtml(url: string, key?: string): Promise<string> {
   let html = '';
   try {
+    assertPublicUrl(url); // seeds come from search providers — untrusted, guard every fetch
     const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,*/*' }, signal: AbortSignal.timeout(18000) });
     html = await r.text();
   } catch { /* ignore */ }
@@ -47,6 +49,35 @@ async function getHtml(url: string, key?: string): Promise<string> {
 }
 
 const bareHost = (h: string) => h.replace(/^www\./i, '');
+
+// ── Sitemap-first product discovery: Shopify publishes /sitemap_products_1.xml and Woo
+// lists product URLs in child sitemaps — one or two cheap fetches beat every HTML
+// heuristic on recall. Best-effort: any failure returns [] and the HTML path runs. ──
+const PRODUCT_PATH = /\/(products?|item|p)\//i;
+async function sitemapProducts(origin: string, want: number): Promise<string[]> {
+  const out: string[] = [];
+  const fetchText = async (u: string): Promise<string> => {
+    try {
+      const r = await fetch(u, { headers: { 'User-Agent': UA, Accept: 'application/xml,text/xml,*/*' }, signal: AbortSignal.timeout(8000) });
+      return r.ok ? await r.text() : '';
+    } catch { return ''; }
+  };
+  const idx = await fetchText(`${origin}/sitemap.xml`);
+  if (!idx) return out;
+  const locs = [...idx.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
+  const childMaps = locs.filter((u) => /sitemap[^<]*\.xml/i.test(u));
+  const productMaps = childMaps.filter((u) => /product/i.test(u));
+  const maps = productMaps.length ? productMaps.slice(0, 3) : childMaps.slice(0, 3);
+  const xmls = maps.length ? await Promise.all(maps.map(fetchText)) : [idx];
+  for (const xml of xmls) {
+    for (const m of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+      const u = m[1];
+      if (/\.xml(\?|$)/i.test(u)) continue;
+      if (PRODUCT_PATH.test(u)) { out.push(u); if (out.length >= want * 2) return out; }
+    }
+  }
+  return out;
+}
 function findListingUrls(html: string, baseHref: string, host: string): string[] {
   const out = new Set<string>();
   for (const m of html.matchAll(/href=["']([^"'#\s]+)["']/gi)) {
@@ -62,6 +93,12 @@ function findListingUrls(html: string, baseHref: string, host: string): string[]
 
 export async function POST(req: NextRequest) {
   const g = requireRole(req); if ('error' in g) return g.error;
+  // safety cap — one discover fans out into many paid calls; bound it per user per day
+  if (dbConfigured()) {
+    const cap = Math.max(1, Number(process.env.DAILY_DISCOVER_CAP) || 150);
+    const n = await bumpCounter(`discover:${g.session.uid}`).catch(() => 0);
+    if (n > cap) return NextResponse.json({ error: `وصلت سقف الأمان اليومي للاكتشاف (${cap}). ارفع DAILY_DISCOVER_CAP إذا مقصود.` }, { status: 429 });
+  }
   const body = await req.json().catch(() => null);
   const s = await resolveSettings(body?.settings);
   const limit = Math.min(Number(body?.limit) || 10, 20);
@@ -119,8 +156,15 @@ export async function POST(req: NextRequest) {
   try { target = assertPublicUrl(input); } catch (e: any) { return NextResponse.json({ error: String(e?.message) }, { status: 400 }); }
   const host = target.host;
 
+  // 0) sitemap-first — highest recall for the cheapest possible calls
+  if (timeLeft()) {
+    const sm = await sitemapProducts(target.origin, limit);
+    if (sm.length) { add(sm); warnings.push(`sitemap: لقينا ${Math.min(sm.length, limit)} منتج من خريطة الموقع مباشرة`); }
+  }
+
   // 1) scan the given page directly (works if it's already a listing)
-  const homeHtml = await scan(target.href);
+  let homeHtml = '';
+  if (products.size < limit && timeLeft()) homeHtml = await scan(target.href);
 
   // 2) not enough? discover listing/shop pages and scan them
   if (products.size < limit && timeLeft()) {

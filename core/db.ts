@@ -75,6 +75,16 @@ export async function getAllConfig(): Promise<Record<string, string>> {
   return out;
 }
 
+// ── usage counters (daily safety caps) — reuse app_config, no migration needed ──
+export async function bumpCounter(key: string, by = 1): Promise<number> {
+  const day = new Date().toISOString().slice(0, 10);
+  const k = `ctr:${day}:${key}`;
+  const r = (await sql`INSERT INTO app_config (key, value, encrypted, updated_at) VALUES (${k}, ${'1'}, false, now())
+    ON CONFLICT (key) DO UPDATE SET value = ((app_config.value)::int + ${by})::text, updated_at = now()
+    RETURNING value`) as any[];
+  return parseInt(r[0]?.value || '0', 10);
+}
+
 // ── stores (multiple save destinations; token encrypted at rest) ──
 export interface StoreRow { id: number; name: string; base_url: string; category_default: string; is_default: boolean; has_token: boolean }
 export interface StoreResolved { id: number; name: string; base_url: string; token: string; category_default: string }

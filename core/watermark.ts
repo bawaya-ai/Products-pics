@@ -7,6 +7,7 @@
 
 import sharp from 'sharp';
 import type { Settings } from './settings';
+import { capTimeout, remainingMs } from './budget';
 
 interface Box { x: number; y: number; w: number; h: number } // percent 0-100
 const S = 1024;
@@ -22,13 +23,13 @@ function normBox(j: any): Box | null {
   return box;
 }
 
-async function detectAnthropic(thumb: string, key: string, model: string): Promise<Box | null> {
+async function detectAnthropic(thumb: string, key: string, model: string, deadlineAt?: number): Promise<Box | null> {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model: model || 'claude-opus-4-8', max_tokens: 200, messages: [{ role: 'user', content: [
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: thumb } }, { type: 'text', text: PROMPT },
     ] }] }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(capTimeout(30000, deadlineAt)),
   });
   if (!r.ok) throw new Error(`detect anthropic ${r.status}`);
   const d = (await r.json()) as any;
@@ -37,12 +38,12 @@ async function detectAnthropic(thumb: string, key: string, model: string): Promi
   return normBox(m ? JSON.parse(m[0]) : null);
 }
 
-async function detectOpenAI(thumb: string, key: string): Promise<Box | null> {
+async function detectOpenAI(thumb: string, key: string, deadlineAt?: number): Promise<Box | null> {
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model: 'gpt-4o', max_tokens: 150, temperature: 0, response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: [{ type: 'text', text: PROMPT }, { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${thumb}` } }] }] }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(capTimeout(30000, deadlineAt)),
   });
   if (!r.ok) throw new Error(`detect openai ${r.status}`);
   const d = (await r.json()) as any;
@@ -51,7 +52,7 @@ async function detectOpenAI(thumb: string, key: string): Promise<Box | null> {
 
 // High-quality: OpenAI image-edits. Squares for the API, then crops the content back to the
 // original aspect so no white letterbox is baked in.
-async function openaiInpaint(input: Buffer, box: Box, key: string): Promise<Buffer> {
+async function openaiInpaint(input: Buffer, box: Box, key: string, deadlineAt?: number): Promise<Buffer> {
   const meta = await sharp(input).metadata();
   const W = meta.width ?? S, H = meta.height ?? S;
   const scale = Math.min(S / W, S / H);
@@ -75,7 +76,7 @@ async function openaiInpaint(input: Buffer, box: Box, key: string): Promise<Buff
   form.append('n', '1');
   form.append('image', new Blob([new Uint8Array(square)], { type: 'image/png' }), 'image.png');
   form.append('mask', new Blob([new Uint8Array(mask)], { type: 'image/png' }), 'mask.png');
-  const r = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(55000) });
+  const r = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(capTimeout(55000, deadlineAt)) });
   if (!r.ok) throw new Error(`edit ${r.status}: ${(await r.text()).slice(0, 120)}`);
   const d = (await r.json()) as any;
   const b64 = d.data?.[0]?.b64_json;
@@ -100,16 +101,18 @@ async function localFill(input: Buffer, box: Box): Promise<Buffer | null> {
 }
 
 /** Cleaned buffer, or null (keep original) when disabled / no AI key / nothing found / any error. */
-export async function removeWatermark(input: Buffer, s: Settings, log: (m: string) => void): Promise<Buffer | null> {
+export async function removeWatermark(input: Buffer, s: Settings, log: (m: string) => void, deadlineAt?: number): Promise<Buffer | null> {
   if (!s.removeWatermark) return null;
   if (!s.anthropicKey && !s.openaiKey) { log('watermark: skipped (needs an Anthropic or OpenAI key)'); return null; }
+  // optional + slow (detect 2-8s + inpaint 10-30s): never START it into a nearly-spent budget
+  if (remainingMs(deadlineAt) < 25_000) { log('watermark: skipped — time budget too low'); return null; }
   try {
     const thumb = (await sharp(input).resize(512, 512, { fit: 'inside' }).jpeg({ quality: 70 }).toBuffer()).toString('base64');
-    const box = s.anthropicKey ? await detectAnthropic(thumb, s.anthropicKey, s.anthropicModel || 'claude-opus-4-8') : await detectOpenAI(thumb, s.openaiKey!);
+    const box = s.anthropicKey ? await detectAnthropic(thumb, s.anthropicKey, s.anthropicModel || 'claude-opus-4-8', deadlineAt) : await detectOpenAI(thumb, s.openaiKey!, deadlineAt);
     if (!box) { log('watermark: none detected'); return null; }
     log(`watermark @ ${box.x}/${box.y} ${box.w}×${box.h}% — removing…`);
     if (s.openaiKey) {
-      try { const c = await openaiInpaint(input, box, s.openaiKey); log('watermark: inpainted (OpenAI) ✓'); return c; }
+      try { const c = await openaiInpaint(input, box, s.openaiKey, deadlineAt); log('watermark: inpainted (OpenAI) ✓'); return c; }
       catch (e: any) { log(`OpenAI inpaint failed (${String(e?.message).slice(0, 60)}) — local fill`); }
     }
     const c2 = await localFill(input, box);

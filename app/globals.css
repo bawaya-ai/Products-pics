@@ -12,7 +12,7 @@
   --err: #f87171;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { overflow-x: hidden; max-width: 100%; }
+html, body { overflow-x: hidden; overflow-x: clip; max-width: 100%; width: 100%; }
 body {
   background: radial-gradient(1200px 600px at 50% -100px, #3a1016, var(--bg));
   color: var(--text);
@@ -23,7 +23,9 @@ body {
 /* nothing may exceed its container → no horizontal page scroll */
 img, video, canvas, svg { max-width: 100%; }
 button, input, select, textarea { max-width: 100%; }
-.wrap { max-width: 980px; margin: 0 auto; padding: 28px 16px 80px; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 28px 16px 80px; overflow-x: hidden; overflow-x: clip; }
+/* long unbreakable strings (source URLs, tokens, product names) must wrap, never widen the page */
+.log, .hint, .kname, .tb-user, .storemeta, .pricenote, a, code { overflow-wrap: anywhere; }
 header.hero { text-align: center; margin-bottom: 26px; }
 .hero h1 { font-size: 26px; letter-spacing: 0.5px; }
 .hero h1 em { color: var(--gold); font-style: normal; }

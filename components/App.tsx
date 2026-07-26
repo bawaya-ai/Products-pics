@@ -14,16 +14,18 @@ export type Me = { email: string; role: 'admin' | 'operator' };
 interface ClientSettings {
   size: number; quality: number; formats: string[]; maxImages: number;
   bgMode: string; aiEnabled: boolean; anthropicModel: string;
-  category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google';
+  category: string; publish: boolean; searchProvider: 'auto' | 'firecrawl' | 'google' | 'discovery' | 'merge';
   sharpen: number; brightness: number; contrast: number; padding: number;
   bgColor: string; maxKB: number; dedup: boolean; convertCurrency: boolean; removeWatermark: boolean;
+  instagramSearch: boolean; includeVideos: boolean; maxVideoMB: number;
 }
 const DEFAULT_SETTINGS: ClientSettings = {
   size: 1024, quality: 88, formats: ['webp'], maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
-  dedup: true, convertCurrency: true, removeWatermark: false,
+  dedup: true, convertCurrency: true, removeWatermark: false, instagramSearch: false,
+  includeVideos: true, maxVideoMB: 100,
 };
 type SearchMode = 'product' | 'category' | 'domain';
 interface CrawlItem { manifest: Manifest; saved?: string; savedLink?: string; saving?: boolean; skipped?: boolean }
@@ -33,8 +35,39 @@ interface UserRow { id: number; email: string; role: string; must_change: boolea
 type CfgState = { providers: Record<string, { set: boolean; source: string }>; dbConfigured: boolean };
 
 const CATEGORIES = ['toys', 'lingerie', 'couples', 'oils-care', 'gifts', 'offers'];
+const CATS_KEY = 'scraper-pro-cats-v2';       // the full curated list
+const OLD_CATS_KEY = 'scraper-pro-cats-v1';   // legacy: stored only the user's extras
 const LS_KEY = 'scraper-pro-settings-v1';
 const RESULTS_KEY = 'results-v1';
+
+// Category picker — a VISIBLE dropdown that lists every category (so nothing looks
+// "deleted"), plus a "➕ new category" option and a "🗑 remove" option so the operator
+// can curate their own list (e.g. electronics categories for a non-adult store).
+function CatSelect({ value, cats, onChange, onAdd, onRemove, style }:
+  { value: string; cats: string[]; onChange: (v: string) => void; onAdd: (v: string) => void; onRemove: (v: string) => void; style?: any }) {
+  const inList = cats.includes(value);
+  return (
+    <select
+      value={inList ? value : (value ? '__cur__' : '')}
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v === '__add__') {
+          const n = (typeof window !== 'undefined' ? window.prompt('اسم الفئة الجديدة (بالإنجليزي، مثل: mobiles أو tvs):') : '') || '';
+          const t = n.trim(); if (t) { onAdd(t); onChange(t); }
+        } else if (v === '__del__') {
+          const t = (typeof window !== 'undefined' ? window.prompt('اكتب اسم الفئة التي تريد حذفها من القائمة:', inList ? value : '') : '') || '';
+          if (t.trim()) onRemove(t.trim());
+        } else if (v !== '__cur__') onChange(v);
+      }}
+      style={style}
+    >
+      {value && !inList && <option value="__cur__">{value}</option>}
+      {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+      <option value="__add__">➕ إضافة فئة جديدة…</option>
+      {cats.length > 0 && <option value="__del__">🗑 حذف فئة…</option>}
+    </select>
+  );
+}
 
 // Destination <select> — module scope so its element type stays stable across renders.
 function DestPicker({ destStore, setDestStore, cfg, stores }: { destStore: string; setDestStore: (v: string) => void; cfg: CfgState | null; stores: StoreRow[] }) {
@@ -113,7 +146,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const [numProducts, setNumProducts] = useState(10);
   const [siteScope, setSiteScope] = useState('');
   const [ranSearch, setRanSearch] = useState(false); // last run used web search / crawl (→ Firecrawl cost)
-  const [customCats, setCustomCats] = useState<string[]>([]);
+  const [runCosts, setRunCosts] = useState<{ label: string; usd: number; detail?: string }[]>([]); // MEASURED (from provider responses)
+  const [cats, setCats] = useState<string[]>(CATEGORIES);
   const [products, setProducts] = useState<CrawlItem[]>([]);
   const [adapter, setAdapter] = useState<'kiss-play' | 'json'>('kiss-play');
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
@@ -150,20 +184,26 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   }
   function refreshUsers() { fetch('/api/users').then((r) => (r.ok ? r.json() : { users: [] })).then((d) => setUsers(d.users || [])).catch(() => {}); }
 
-  // categories: the fixed set + any the user has typed (persisted, shared as suggestions)
-  const CATS_KEY = 'scraper-pro-cats-v1';
-  const allCats = [...new Set([...CATEGORIES, ...customCats])];
-  function noteCat(c: string) {
+  // categories: a fully user-editable list (seeded with the defaults, persisted).
+  // Add your own (e.g. mobiles/tvs for an electronics store) or remove ones you don't use.
+  function persistCats(next: string[]) { setCats(next); try { localStorage.setItem(CATS_KEY, JSON.stringify(next)); } catch {} }
+  function addCat(c: string) {
     const v = (c || '').trim();
-    if (!v || allCats.includes(v)) return;
-    const next = [...customCats, v];
-    setCustomCats(next);
-    try { localStorage.setItem(CATS_KEY, JSON.stringify(next)); } catch {}
+    if (!v || cats.includes(v)) return;
+    persistCats([...cats, v]);
+  }
+  function removeCat(c: string) {
+    const v = (c || '').trim();
+    persistCats(cats.filter((x) => x !== v));
   }
 
   useEffect(() => {
     try { const raw = localStorage.getItem(LS_KEY); if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }); } catch {}
-    try { const rc = localStorage.getItem(CATS_KEY); if (rc) setCustomCats(JSON.parse(rc)); } catch {}
+    try {
+      const rc = localStorage.getItem(CATS_KEY);
+      if (rc) { const a = JSON.parse(rc); if (Array.isArray(a) && a.length) setCats(a); }
+      else { const old = localStorage.getItem(OLD_CATS_KEY); const extra = old ? JSON.parse(old) : []; setCats([...new Set([...CATEGORIES, ...(Array.isArray(extra) ? extra : [])])]); }
+    } catch {}
     refreshCfg(); refreshStores();
     if (mode === 'admin') refreshUsers();
     if (mode === 'tool') {
@@ -191,7 +231,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
 
   // ── admin: keys ──
   const savedSource = (id: string): 'db' | 'env' | 'none' => { const st = cfg?.providers?.[id]; return st?.set ? (st.source as 'db' | 'env') : 'none'; };
-  const PROVIDER_IDS = ['anthropic', 'removebg', 'replicate', 'firecrawl', 'googleCse', 'openai', 'store', 'resend'];
+  const PROVIDER_IDS = ['anthropic', 'removebg', 'replicate', 'firecrawl', 'googleVertex', 'googleCse', 'openai', 'store', 'resend'];
   async function saveKeys() {
     const keys: Record<string, string> = {};
     for (const [k, v] of Object.entries(keyDraft)) if (v && v.trim()) keys[k] = v.trim();
@@ -305,6 +345,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
             if (e.status === 'done') pushLog(`${pre}✓ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'ok');
             else if (e.status === 'failed') pushLog(`${pre}✗ صورة ${e.index + 1}/${e.total} — ${e.detail}`, 'err');
           }
+          else if (e.type === 'cost') setRunCosts((c) => [...c, { label: e.label, usd: e.usd, detail: e.detail }]);
           else if (e.type === 'warn') pushLog(`${pre}⚠ ${e.message}`, 'warn');
           else if (e.type === 'error') { pushLog(`${pre}✗ ${e.message}`, 'err'); setProgress(0); }
           else if (e.type === 'result') { manifestOut = e.manifest; setProgress(100); }
@@ -320,7 +361,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     if (searchMode === 'domain') return runDiscoverCrawl({ url: url.trim(), limit: numProducts });
     // specific product: a URL → scrape it, a name → image-search → one product
     setRanSearch(!/^https?:\/\//i.test(url.trim())); // a product NAME triggers web search; a URL doesn't
-    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(4); setRestored(false);
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setRunCosts([]); setProgress(4); setRestored(false);
     pushLog('▶ بدأنا…');
     const m = await scrapeUrl(url.trim());
     if (m) { setManifest(m); pushLog('✓ جاهز للمعاينة', 'ok'); }
@@ -329,7 +370,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   // Category (query→product pages) OR Domain (site→product links): discover URLs, scrape each.
   async function runDiscoverCrawl(body: { query?: string; site?: string; url?: string; limit: number }) {
     setRanSearch(true); // category/domain always use Firecrawl search/crawl
-    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setProgress(2); setRestored(false);
+    setBusy(true); setManifest(null); setProducts([]); setSaveMsg(null); setLogLines([]); setRunCosts([]); setProgress(2); setRestored(false);
     pushLog(body.query ? `▶ بحث فئة: "${body.query}"${body.site ? ` داخل ${body.site}` : ''}…` : '▶ زحف على المتجر — بكتشف روابط المنتجات…');
     try {
       const dres = await fetch('/api/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, settings }) });
@@ -413,7 +454,14 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
       '## תיאור (HE)', m.description.he || '—', '', '---', `المصدر: ${m.sourceUrl}`, `عدد الصور: ${m.images.filter((i) => i.role !== 'skip').length}`, '',
     ].join('\n');
   }
-  function addProductFolder(zip: any, m: Manifest, folderName: string) {
+  // Video for the ZIP: direct browser fetch first (free bandwidth; works on CORS-open CDNs
+  // like Instagram's), else the server proxy. null = both failed (a link note is written).
+  async function fetchVideoBlob(url: string, maxMB: number): Promise<Blob | null> {
+    try { const r = await fetch(url); if (r.ok) { const b = await r.blob(); if (b.size <= maxMB * 1048576) return b; } } catch { /* CORS/network */ }
+    try { const r = await fetch(`/api/video-fetch?url=${encodeURIComponent(url)}&maxMB=${maxMB}`); if (r.ok) return await r.blob(); } catch { /* proxy failed */ }
+    return null;
+  }
+  async function addProductFolder(zip: any, m: Manifest, folderName: string) {
     const f = zip.folder(folderName)!;
     const kept = m.images.filter((i) => i.role !== 'skip');
     let a = 0, d = 0;
@@ -423,16 +471,25 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
       f.file(`${base}.${primExt}`, img.dataUrl.split(',')[1], { base64: true });
       (img.variants || []).forEach((v) => f.file(`${base}.${v.format}`, v.dataUrl.split(',')[1], { base64: true }));
     });
+    // kept videos: real files in the folder; a failed download becomes a link note, never a failed ZIP
+    const vids = (m.videos || []).filter((v) => v.keep !== false);
+    for (let vn = 0; vn < vids.length; vn++) {
+      const v = vids[vn];
+      pushLog(`— تنزيل فيديو ${vn + 1}/${vids.length}…`);
+      const blob = await fetchVideoBlob(v.url, settings.maxVideoMB || 100);
+      if (blob) f.file(`video-${vn + 1}.${v.contentType?.includes('webm') ? 'webm' : 'mp4'}`, blob);
+      else f.file(`video-${vn + 1}-link.txt`, `تعذّر تنزيل الفيديو تلقائيًا — الرابط:\n${v.url}\n`);
+    }
     f.file('description.md', descriptionMd(m));
     f.file('manifest.json', JSON.stringify({ ...m, images: kept.map(({ dataUrl, variants, ...rest }) => rest) }, null, 2));
   }
   async function downloadZip(m: Manifest) {
     const JSZip = (await import('jszip')).default;
     const zip = new JSZip();
-    addProductFolder(zip, m, slugify(m.name.en || m.name.ar));
+    await addProductFolder(zip, m, slugify(m.name.en || m.name.ar));
     const blob = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slugify(m.name.en || m.name.ar)}.zip`; a.click();
-    setSaveMsg({ ok: true, text: '✓ تنزّل مجلد المنتج (صور + description.md + manifest.json)' });
+    setSaveMsg({ ok: true, text: '✓ تنزّل مجلد المنتج (صور + فيديو + description.md + manifest.json)' });
   }
   async function downloadAllProducts() {
     const items = products.filter((p) => !p.skipped);
@@ -440,7 +497,13 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
     const JSZip = (await import('jszip')).default;
     const zip = new JSZip();
     const used = new Set<string>();
-    items.forEach((p, i) => { let name = slugify(p.manifest.name.en || p.manifest.name.ar, `product-${i + 1}`); while (used.has(name)) name = `${name}-${i + 1}`; used.add(name); addProductFolder(zip, p.manifest, name); });
+    for (let i = 0; i < items.length; i++) {
+      const p = items[i];
+      let name = slugify(p.manifest.name.en || p.manifest.name.ar, `product-${i + 1}`);
+      while (used.has(name)) name = `${name}-${i + 1}`;
+      used.add(name);
+      await addProductFolder(zip, p.manifest, name);
+    }
     const blob = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `products-${items.length}.zip`; a.click();
   }
@@ -448,10 +511,11 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   const KEY_GROUPS = [
     { title: '🔎 البحث عن الصور', rows: [
       { id: 'firecrawl', label: 'Firecrawl', fields: [{ k: 'firecrawlKey', ph: 'fc-…' }], hint: 'بحث بالاسم · معرض كامل · زحف على القوائم' },
-      { id: 'googleCse', label: 'Google CSE', fields: [{ k: 'googleCseKey', ph: 'AIza…' }, { k: 'googleCseCx', ph: 'cx (معرّف المحرّك)', type: 'text' }], hint: 'بديل للبحث' },
+      { id: 'googleVertex', label: 'Google Vertex (Discovery)', fields: [{ k: 'googleSaKey', ph: 'base64 لمفتاح الخدمة JSON (سطر واحد)' }, { k: 'discoveryEngine', ph: 'Engine ID (اختياري)', type: 'text' }], hint: 'بحث منتجات جوجل — بديل CSE المحجوب' },
+      { id: 'googleCse', label: 'Google CSE (قديم/محجوب)', fields: [{ k: 'googleCseKey', ph: 'AIza…' }, { k: 'googleCseCx', ph: 'cx (معرّف المحرّك)', type: 'text' }], hint: 'محجوب على مؤسستك — استخدم Vertex فوق' },
     ] },
     { title: '✂️ إزالة الخلفية', rows: [
-      { id: 'replicate', label: 'Replicate', fields: [{ k: 'replicateKey', ph: 'r8_…' }], hint: 'أعلى جودة قصّ (اختياري)' },
+      { id: 'replicate', label: 'Replicate', fields: [{ k: 'replicateKey', ph: 'r8_…' }, { k: 'replicateModel', ph: 'موديل القص (اختياري): bria/remove-background أو men1scus/birefnet', type: 'text' }], hint: 'أعلى جودة قصّ (اختياري) · BiRefNet أدق بالشعر والتفاصيل' },
       { id: 'removebg', label: 'remove.bg', fields: [{ k: 'removebgKey', ph: '…' }], hint: 'اختياري · المجاني المحلي شغّال بدون مفتاح' },
     ] },
     { title: '🧠 الذكاء — اسم/وصف/اختيار الصور', rows: [
@@ -469,7 +533,6 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
   return (
     <div className="wrap">
       <TopBar me={me} mode={mode} />
-      <datalist id="catlist">{allCats.map((c) => <option key={c} value={c} />)}</datalist>
 
       {mode === 'tool' ? (
         <>
@@ -505,19 +568,29 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   <input type="text" dir="ltr" placeholder="amazon.com" value={siteScope} onChange={(e) => setSiteScope(e.target.value)} style={{ width: 130 }} /></label>
               )}
               {searchMode === 'product' && (
-                <label className="ctl">مزوّد البحث
-                  <select value={settings.searchProvider} onChange={(e) => upd({ searchProvider: e.target.value as any })}>
-                    <option value="auto">تلقائي (موصى)</option>
-                    <option value="firecrawl">Firecrawl</option>
-                    <option value="google">Google (محجوب)</option>
-                  </select></label>
+                <>
+                  <label className="ctl">مزوّد البحث
+                    <select value={settings.searchProvider} onChange={(e) => upd({ searchProvider: e.target.value as any })}
+                      title="تلقائي: Discovery يلاقي الصفحات + Firecrawl يسحب الصور · دمج: الاثنين بالتوازي وتوحيد النتائج · أو واحد لحاله">
+                      <option value="auto">تلقائي (موصى)</option>
+                      <option value="merge">دمج</option>
+                      <option value="discovery">Vertex</option>
+                      <option value="firecrawl">Firecrawl</option>
+                    </select></label>
+                  <label className="ctl">📸 انستجرام
+                    <select value={settings.instagramSearch ? '1' : '0'} onChange={(e) => upd({ instagramSearch: e.target.value === '1' })}
+                      title="مصدر إضافي: يجيب صور من بوستات انستجرام العامة كمان — مطفي افتراضيًا (يحتاج مفتاح Firecrawl)">
+                      <option value="0">مطفي</option>
+                      <option value="1">مفعّل</option>
+                    </select></label>
+                </>
               )}
               <button className="btn-ghost" onClick={() => setShowOpts((v) => !v)} style={{ marginInlineStart: 'auto', padding: '5px 12px', fontSize: 13 }}>{showOpts ? '▲ إخراج' : '⚙️ إخراج'}</button>
             </div>
             <div className="hint" style={{ marginTop: 6 }}>
               {searchMode === 'category' ? 'اكتب نوع المنتج → بلاقي عدّة منتجات مختلفة ويسحب كل واحد لحاله. حدّد موقع لو بدك من متجر معيّن.'
                 : searchMode === 'domain' ? 'اعطِ دومين متجر → بلاقي صفحات المنتجات لحاله ويسحب كل واحد (صور + وصف + سعر).'
-                : 'الصق رابط منتج، أو اكتب اسمه بالضبط للبحث بصوره. النتيجة منتج واحد.'}
+                : `الصق رابط منتج، أو اكتب اسمه بالضبط للبحث بصوره. النتيجة منتج واحد.${settings.instagramSearch ? ' · 📸 انستجرام مفعّل — بجيب صور من بوستات عامة كمان (انتبه للحقوق).' : ''}`}
             </div>
             {showOpts && (
               <div className="ioptions" style={{ marginTop: 8 }}>
@@ -541,6 +614,12 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   <input type="number" min={1} max={12} value={settings.maxImages} onChange={(e) => upd({ maxImages: +e.target.value })} /></div>
                 <div><label className="f">ذكاء (اسم/وصف)</label>
                   <select value={settings.aiEnabled ? '1' : '0'} onChange={(e) => upd({ aiEnabled: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي</option></select></div>
+                <div><label className="f">موديل الذكاء</label>
+                  <select value={settings.anthropicModel} onChange={(e) => upd({ anthropicModel: e.target.value })}>
+                    <option value="claude-opus-4-8">Opus 4.8 (الحالي)</option>
+                    <option value="claude-opus-5">Opus 5 (موصى — نفس السعر)</option>
+                    <option value="claude-sonnet-5">Sonnet 5 (أرخص)</option>
+                  </select></div>
                 <div><label className="f">حدّة · {settings.sharpen}</label>
                   <input type="range" min={0} max={100} value={settings.sharpen} onChange={(e) => upd({ sharpen: +e.target.value })} /></div>
                 <div><label className="f">سطوع · {settings.brightness}%</label>
@@ -559,6 +638,10 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                   <select value={settings.dedup ? '1' : '0'} onChange={(e) => upd({ dedup: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي (يبقّي الكل)</option></select></div>
                 <div><label className="f">تحويل العملة → ₪</label>
                   <select value={settings.convertCurrency ? '1' : '0'} onChange={(e) => upd({ convertCurrency: e.target.value === '1' })}><option value="1">مفعّل</option><option value="0">مطفي</option></select></div>
+                <div><label className="f">🎬 فيديو المنتج</label>
+                  <select value={settings.includeVideos ? '1' : '0'} onChange={(e) => upd({ includeVideos: e.target.value === '1' })}><option value="1">مفعّل — بينحفظ فعليًا</option><option value="0">مطفي</option></select></div>
+                <div><label className="f">أقصى حجم فيديو · MB</label>
+                  <input type="number" min={5} max={300} step={5} value={settings.maxVideoMB} onChange={(e) => upd({ maxVideoMB: Math.min(300, Math.max(5, +e.target.value || 100)) })} /></div>
                 <div style={{ gridColumn: 'span 2' }}><label className="f">🧽 إزالة العلامة المائية (تجريبي · كشف Claude + مسح OpenAI · للصورة الرئيسية · أبطأ)</label>
                   <select value={settings.removeWatermark ? '1' : '0'} onChange={(e) => upd({ removeWatermark: e.target.value === '1' })}><option value="0">مطفي</option><option value="1">مفعّل — يكشف ويمسح الشعار/العلامة</option></select></div>
               </div>
@@ -577,6 +660,24 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
           {(manifest || products.length > 0) && (() => {
             const items = manifest ? [manifest] : products.filter((p) => !p.skipped).map((p) => p.manifest);
             if (!items.length) return null;
+            // MEASURED spend (streamed live from provider responses) beats the old estimate
+            if (runCosts.length) {
+              const agg = new Map<string, { usd: number; n: number }>();
+              for (const c of runCosts) { const a = agg.get(c.label) || { usd: 0, n: 0 }; a.usd += c.usd; a.n += 1; agg.set(c.label, a); }
+              const rows = [...agg.entries()].map(([label, v]) => ({ label: v.n > 1 ? `${label} ×${v.n}` : label, usd: v.usd }));
+              const total = rows.reduce((sum, r) => sum + r.usd, 0);
+              return (
+                <div className="card costcard">
+                  <div className="costhead"><span>💰 التكلفة المُقاسة فعليًا</span><strong className="costtotal">${total.toFixed(3)} <span style={{ fontSize: 12, opacity: 0.8 }}>≈₪{(total * 3.7).toFixed(2)}</span></strong></div>
+                  <div className="costrows">
+                    {rows.map((r, i) => (
+                      <div key={i} className="costrow"><span>{r.label}</span><span className="costusd">${r.usd.toFixed(3)}</span></div>
+                    ))}
+                  </div>
+                  <div className="hint">مُقاسة من ردود المزوّدين نفسهم أثناء التشغيل (توكنات الذكاء بالضبط). بحث/زحف Firecrawl بينحسب من رصيدك بلوحة الإدارة.</div>
+                </div>
+              );
+            }
             const est = estimateCost(items, settings.aiEnabled, ranSearch);
             return (
               <div className="card costcard">
@@ -619,7 +720,7 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                       <input type="text" value={p.manifest.name.ar} onChange={(e) => setPName(idx, e.target.value)} placeholder="اسم المنتج" style={{ marginTop: 6 }} />
                       <div className="row" style={{ marginTop: 6 }}>
                         <input type="number" value={p.manifest.price.amount ?? ''} onChange={(e) => setPPrice(idx, e.target.value)} placeholder="₪ سعر" style={{ width: 90 }} />
-                        <input list="catlist" value={p.manifest.category} onChange={(e) => setPCat(idx, e.target.value)} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة (اكتب أو اختَر)" style={{ flex: 1 }} />
+                        <CatSelect value={p.manifest.category} cats={cats} onChange={(v) => setPCat(idx, v)} onAdd={addCat} onRemove={removeCat} style={{ flex: 1 }} />
                       </div>
                       {p.manifest.price.original && <div className="pricenote">↩ محوّل من {p.manifest.price.original.amount} {p.manifest.price.original.currency}</div>}
                       <div className="row" style={{ marginTop: 7 }}>
@@ -660,13 +761,41 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                 </div>
               </div>
 
-              {manifest.video && (
-                <div className="card">
-                  <strong>🎬 فيديو المنتج</strong>
-                  <video className="vidprev" controls preload="metadata" src={manifest.video.url} poster={manifest.images.find((i) => i.role === 'main')?.dataUrl} />
-                  <div className="hint" style={{ marginTop: 6 }}><a href={manifest.video.url} target="_blank" rel="noreferrer">⬇️ فتح/تنزيل الفيديو ↗</a> · يُعرض من المصدر مباشرة (ما بينحفظ محليًا)</div>
-                </div>
-              )}
+              {(() => {
+                // multi-video review grid; legacy manifests (single video field) get a shim
+                const vids = manifest.videos ?? (manifest.video ? [{
+                  id: 'legacy', url: manifest.video.url, poster: manifest.video.poster,
+                  source: 'raw' as const, probe: 'partial' as const, keep: true,
+                }] : []);
+                if (!vids.length) return null;
+                const toggleVideo = (id: string) => setManifest((m) => m && {
+                  ...m,
+                  videos: (m.videos || vids).map((v) => (v.id === id ? { ...v, keep: v.keep === false } : v)),
+                });
+                return (
+                  <div className="card">
+                    <strong>🎬 فيديوهات المنتج ({vids.filter((v) => v.keep !== false).length} للحفظ)</strong>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(240px,1fr))', gap: 10, marginTop: 8 }}>
+                      {vids.map((v) => (
+                        <div key={v.id} style={v.keep === false ? { opacity: 0.35 } : {}}>
+                          <video className="vidprev" controls preload="metadata" src={v.url}
+                            poster={v.poster || manifest.images.find((i) => i.role === 'main')?.dataUrl} />
+                          <div className="hint" dir="ltr" style={{ textAlign: 'left' }}>
+                            {v.width && v.height ? `${v.width}×${v.height}` : v.probe}
+                            {v.bytes ? ` · ${(v.bytes / 1048576).toFixed(0)}MB` : ''}
+                            {v.contentType ? ` · ${v.contentType.split('/')[1]?.toUpperCase()}` : ''}
+                            {v.source === 'instagram' ? ' · IG' : ''}
+                          </div>
+                          <button className="btn-ghost" onClick={() => toggleVideo(v.id)} style={{ padding: '4px 10px', fontSize: 13 }}>
+                            {v.keep === false ? '↩ رجّع' : '🗑 استبعد'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="hint" style={{ marginTop: 6 }}>الفيديو المُبقى بينحفظ فعليًا عند المتجر وبينزل مع المجلد المحلي. المعاينة من المصدر مباشرة — لو ما اشتغلت، الحفظ بيظل شغّال.</div>
+                  </div>
+                );
+              })()}
 
               <div className="card">
                 <strong>✏️ بيانات المنتج</strong>
@@ -685,8 +814,8 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                     <input type="number" min={0} style={{ width: 130 }} value={manifest.price.amount ?? ''} placeholder="0"
                       onChange={(e) => setManifest((m) => m && { ...m, price: { ...m.price, amount: e.target.value ? +e.target.value : null } })} />
                     {manifest.price.original && <span className="pricenote">↩ محوّل من {manifest.price.original.amount} {manifest.price.original.currency}</span>}</div>
-                  <div><label className="f">القسم (اكتب أو اختَر)</label>
-                    <input list="catlist" style={{ width: 160 }} value={manifest.category} onChange={(e) => setManifest((m) => m && { ...m, category: e.target.value })} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة" /></div>
+                  <div><label className="f">القسم (اختَر أو ➕ أضِف)</label>
+                    <CatSelect value={manifest.category} cats={cats} onChange={(v) => setManifest((m) => m && { ...m, category: v })} onAdd={addCat} onRemove={removeCat} style={{ width: 160 }} /></div>
                   <div><label className="f">نشر فوري؟</label>
                     <select style={{ width: 120 }} value={settings.publish ? '1' : '0'} onChange={(e) => upd({ publish: e.target.value === '1' })}>
                       <option value="1">نعم — فعّال</option><option value="0">مسودة</option>
@@ -805,8 +934,9 @@ export default function App({ mode, me }: { mode: 'tool' | 'admin'; me: Me }) {
                 <input type="text" dir="ltr" placeholder="https://…workers.dev" value={storeForm.base_url} onChange={(e) => setStoreForm((f) => ({ ...f, base_url: e.target.value }))} />
                 <input type="password" dir="ltr" placeholder={storeForm.id ? '•••• التوكن محفوظ — اكتب للتغيير' : 'Import Token'} value={storeForm.token} onChange={(e) => setStoreForm((f) => ({ ...f, token: e.target.value }))} />
               </div>
-              <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap' }}>
-                <input list="catlist" value={storeForm.category_default} onChange={(e) => setStoreForm((f) => ({ ...f, category_default: e.target.value }))} onBlur={(e) => noteCat(e.target.value)} placeholder="فئة افتراضية (اكتب أو اختَر)" style={{ width: 190 }} />
+              <div className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span className="f" style={{ margin: 0 }}>الفئة الافتراضية:</span>
+                <CatSelect value={storeForm.category_default} cats={cats} onChange={(v) => setStoreForm((f) => ({ ...f, category_default: v }))} onAdd={addCat} onRemove={removeCat} style={{ width: 190 }} />
                 <label className="f" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
                   <input type="checkbox" checked={storeForm.is_default} onChange={(e) => setStoreForm((f) => ({ ...f, is_default: e.target.checked }))} /> الوجهة الافتراضية
                 </label>

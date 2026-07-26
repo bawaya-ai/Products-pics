@@ -32,15 +32,17 @@ export async function processImage(
   contentType: string,
   s: Settings,
   log: (m: string) => void,
+  deadlineAt?: number,
+  onCost?: (label: string, usd: number, detail?: string) => void,
 ): Promise<ProcessOutput> {
   const warnings: string[] = [];
 
   // 0) optional watermark/logo removal (inpaint) BEFORE cutout, so the model sees full context
-  const dewm = await removeWatermark(input, s, log).catch(() => null);
-  if (dewm) { input = dewm; contentType = 'image/png'; warnings.push('watermark_removed'); }
+  const dewm = await removeWatermark(input, s, log, deadlineAt).catch(() => null);
+  if (dewm) { input = dewm; contentType = 'image/png'; warnings.push('watermark_removed'); onCost?.('إزالة علامة مائية', 0.03); }
 
   // 1) background removal via the provider chain
-  const cut = await removeBackground(input, contentType, s, log);
+  const cut = await removeBackground(input, contentType, s, log, deadlineAt, onCost);
   const bgProvider = cut?.provider ?? 'none';
   if (!cut && s.bgMode !== 'off') warnings.push('background_not_removed');
 

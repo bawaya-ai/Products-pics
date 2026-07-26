@@ -7,8 +7,11 @@ export interface Settings {
   replicateKey?: string; replicateModel?: string; removebgKey?: string; allowOpenAIImages?: boolean;
   aiEnabled: boolean; anthropicKey?: string; anthropicModel?: string; openaiKey?: string;
   firecrawlKey?: string; googleCseKey?: string; googleCseCx?: string;
+  // Google Vertex AI Search (Discovery Engine) — replaces the deprecated/blocked CSE
+  googleSaKey?: string;        // service-account key JSON (raw or base64) — SECRET
+  discoveryProject?: string; discoveryEngine?: string; discoveryLocation?: string;
   storeBase?: string; storeToken?: string; category?: string; publish?: boolean;
-  searchProvider?: 'auto' | 'firecrawl' | 'google';
+  searchProvider?: 'auto' | 'firecrawl' | 'google' | 'discovery' | 'merge';
   resendKey?: string; resendFrom?: string;
   // Phase 7 — output tuning + behavior
   sharpen: number;       // 0..100 (0 = off)
@@ -20,28 +23,35 @@ export interface Settings {
   dedup: boolean;        // drop near-duplicate images (toggle off to keep all)
   convertCurrency: boolean; // convert detected price → ILS
   removeWatermark: boolean; // experimental: detect + inpaint an overlaid watermark/logo
+  instagramSearch: boolean; // extra source for product search: public Instagram posts (OFF by default)
+  includeVideos: boolean;   // harvest + probe product videos (ON by default; store downloads them at save)
+  maxVideoMB: number;       // per-video size cap (only enforced when the size is known)
 }
 
 const DEFAULTS: Settings = {
   size: 1024, quality: 88, formats: ['webp'], maxImages: 8,
   bgMode: 'auto', aiEnabled: true, anthropicModel: 'claude-opus-4-8', category: 'toys', publish: true,
   searchProvider: 'auto',
+  discoveryProject: '601004755002', discoveryEngine: 'product-image-search_1785023650361', discoveryLocation: 'global',
   sharpen: 0, brightness: 100, contrast: 100, padding: 0, bgColor: 'transparent', maxKB: 400,
-  dedup: true, convertCurrency: true, removeWatermark: false,
+  dedup: true, convertCurrency: true, removeWatermark: false, instagramSearch: false,
+  includeVideos: true, maxVideoMB: 100,
 };
 
 // setting key → env var name
 const ENV_MAP: Record<string, string> = {
-  replicateKey: 'REPLICATE_API_TOKEN', removebgKey: 'REMOVEBG_API_KEY', anthropicKey: 'ANTHROPIC_API_KEY',
+  replicateKey: 'REPLICATE_API_TOKEN', replicateModel: 'REPLICATE_MODEL', removebgKey: 'REMOVEBG_API_KEY', anthropicKey: 'ANTHROPIC_API_KEY',
   openaiKey: 'OPENAI_API_KEY', firecrawlKey: 'FIRECRAWL_API_KEY', googleCseKey: 'GOOGLE_CSE_KEY',
   googleCseCx: 'GOOGLE_CSE_CX', storeBase: 'STORE_BASE', storeToken: 'STORE_IMPORT_TOKEN',
   resendKey: 'RESEND_API_KEY', resendFrom: 'RESEND_FROM',
+  googleSaKey: 'GOOGLE_SA_KEY', discoveryProject: 'GOOGLE_DISCOVERY_PROJECT',
+  discoveryEngine: 'GOOGLE_DISCOVERY_ENGINE', discoveryLocation: 'GOOGLE_DISCOVERY_LOCATION',
 };
 const KEY_FIELDS = Object.keys(ENV_MAP);
 // extra app_config keys that aren't provider KEY_FIELDS but are still admin-editable
 const EXTRA_CONFIG = new Set(['appPassword']);
 // which stored values are secrets (encrypted at rest); URLs/ids/senders are not
-const NON_SECRET = new Set(['storeBase', 'googleCseCx', 'resendFrom']);
+const NON_SECRET = new Set(['storeBase', 'googleCseCx', 'resendFrom', 'discoveryProject', 'discoveryEngine', 'discoveryLocation', 'replicateModel']);
 
 /** Resolve keys: DB (UI-editable, wins) → env (legacy) → client. Prefs from client/defaults. */
 export async function resolveSettings(client: Partial<Settings> | undefined): Promise<Settings> {
@@ -49,6 +59,7 @@ export async function resolveSettings(client: Partial<Settings> | undefined): Pr
   s.size = clamp(Number(s.size) || 1024, 256, 2048);
   s.quality = clamp(Number(s.quality) || 88, 40, 100);
   s.maxImages = clamp(Number(s.maxImages) || 8, 1, 12);
+  s.maxVideoMB = clamp(Number(s.maxVideoMB) || 100, 5, 300);
   // one or more export formats; tolerate the old single `format` field + normalize jpeg→jpg
   const raw = Array.isArray(s.formats) ? s.formats : (s as any).format ? [(s as any).format] : ['webp'];
   const allow = ['webp', 'png', 'jpg', 'avif'];
@@ -72,7 +83,7 @@ export async function configStatus(): Promise<Record<string, { set: boolean; sou
   const providers: Record<string, string> = {
     firecrawl: 'firecrawlKey', anthropic: 'anthropicKey', openai: 'openaiKey',
     replicate: 'replicateKey', removebg: 'removebgKey', googleCse: 'googleCseKey', store: 'storeToken',
-    resend: 'resendKey',
+    resend: 'resendKey', googleVertex: 'googleSaKey',
   };
   const out: Record<string, { set: boolean; source: 'db' | 'env' | 'none' }> = {};
   for (const [id, key] of Object.entries(providers)) {
